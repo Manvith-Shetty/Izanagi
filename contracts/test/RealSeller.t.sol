@@ -50,7 +50,7 @@ contract RealSellerForkTest is Test {
         vm.etch(agent, "");
         vm.etch(oracle, "");
 
-        collector = new CountersignCollector();
+        collector = new CountersignCollector(ESCROW);
         cs = new Countersign(owner, ESCROW, agent, oracle);
         deal(USDC, address(cs), 20_000_000); // 20 real Base USDC
 

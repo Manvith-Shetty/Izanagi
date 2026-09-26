@@ -45,7 +45,7 @@ contract ExtraTest is Test {
     function test_B_PaysRealMainnetSeller() public {
         agent = vm.addr(agentPk); oracle = vm.addr(oraclePk); rAuth = vm.addr(rAuthPk);
         vm.etch(agent,""); vm.etch(oracle,""); vm.etch(rAuth,"");
-        CountersignCollector col = new CountersignCollector();
+        CountersignCollector col = new CountersignCollector(ESCROW);
         Countersign cs = new Countersign(owner, ESCROW, agent, oracle);
         deal(USDC, address(cs), 50_000_000);
 
@@ -82,7 +82,7 @@ contract ExtraTest is Test {
         agent = vm.addr(agentPk); oracle = vm.addr(oraclePk); rAuth = vm.addr(rAuthPk);
         vm.etch(agent,""); vm.etch(oracle,""); vm.etch(rAuth,"");
         address seller = address(0x5E11E5); vm.etch(seller,"");
-        CountersignCollector col = new CountersignCollector();
+        CountersignCollector col = new CountersignCollector(ESCROW);
         Countersign cs = new Countersign(owner, ESCROW, agent, oracle);
         deal(USDC, address(cs), 50_000_000);
         ChannelConfig memory cfg = ChannelConfig({
@@ -123,7 +123,7 @@ contract ExtraTest is Test {
         agent = vm.addr(agentPk); oracle = vm.addr(oraclePk); rAuth = vm.addr(rAuthPk);
         vm.etch(agent,""); vm.etch(oracle,""); vm.etch(rAuth,"");
         address seller = address(0x5E11E5); vm.etch(seller,"");
-        CountersignCollector col = new CountersignCollector();
+        CountersignCollector col = new CountersignCollector(ESCROW);
         Countersign cs = new Countersign(owner, ESCROW, agent, oracle);
         deal(USDC, address(cs), 50_000_000);
         ChannelConfig memory cfg = ChannelConfig({
@@ -146,5 +146,29 @@ contract ExtraTest is Test {
         esc.settle(seller, USDC);
         assertEq(IERC20(USDC).balanceOf(seller), 5_000_000, "claimed funds are final; revocation cannot claw back");
         console.log("LIMITATION confirmed: claim-before-revoke is irreversible");
+    }
+}
+
+/// The deposit collector moves a wallet's approved USDC. Only Coinbase's escrow may make it
+/// move, and only into the escrow: anyone else calling it must get nothing.
+contract CollectorAccessTest is Test {
+    address constant ESCROW = 0x4020074e9dF2ce1deE5A9C1b5c3f541D02a10003;
+    address constant USDC   = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+
+    function test_StrangerCannotDrainTheAllowance() public {
+        vm.createSelectFork(vm.envString("BASE_RPC"));
+        address owner = address(0x0117E5);
+        address attacker = address(0xBADBAD);
+        CountersignCollector collector = new CountersignCollector(ESCROW);
+        Countersign cs = new Countersign(owner, ESCROW, address(0xA11CE), address(0x0DACE));
+        deal(USDC, address(cs), 10_000_000);
+        vm.prank(owner);
+        cs.approveToken(USDC, address(collector), 10_000_000);
+
+        vm.prank(attacker);
+        vm.expectRevert();
+        collector.collect(address(cs), USDC, 10_000_000, bytes32(0), "");
+        assertEq(IERC20(USDC).balanceOf(attacker), 0, "the attacker walked away with the wallet's USDC");
+        assertEq(IERC20(USDC).balanceOf(address(cs)), 10_000_000);
     }
 }

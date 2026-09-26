@@ -63,7 +63,7 @@ create() {
   [ -n "$addr" ] || die "deploying $1 failed: $out"
   echo "$addr"
 }
-COLLECTOR=$(create src/Countersign.sol:CountersignCollector)
+COLLECTOR=$(create src/Countersign.sol:CountersignCollector --constructor-args "$ESCROW")
 WALLET=$(create src/Countersign.sol:Countersign --constructor-args "$OWNER" "$ESCROW" "$AGENT" "$ORACLE")
 
 # USDC (FiatTokenV2_2) keeps balances at storage slot 9

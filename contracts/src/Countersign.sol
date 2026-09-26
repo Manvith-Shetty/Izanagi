@@ -4,11 +4,23 @@ pragma solidity ^0.8.24;
 import {IX402BatchSettlement, IDepositCollector, IERC20, ChannelConfig} from "./IX402.sol";
 
 /// @title CountersignCollector
-/// @notice Pluggable deposit collector: pulls funds from the Countersign wallet into the escrow.
-/// @dev The escrow calls this, so `msg.sender` is the escrow itself.
+/// @notice Pluggable deposit collector: pulls funds from a Countersign wallet into the escrow.
+/// @dev Wallets approve this contract, so whoever can make it call `transferFrom` can spend
+///      their allowance. Only the escrow may, and the funds only ever go to the escrow -- where
+///      they sit in a channel whose payer is the wallet itself, claimable only with vouchers the
+///      wallet accepts, and withdrawable only by the wallet's owner.
 contract CountersignCollector is IDepositCollector {
+    address public immutable escrow;
+
+    error NotEscrow();
+
+    constructor(address _escrow) {
+        escrow = _escrow;
+    }
+
     function collect(address payer, address token, uint256 amount, bytes32, bytes calldata) external {
-        require(IERC20(token).transferFrom(payer, msg.sender, amount), "pull failed");
+        if (msg.sender != escrow) revert NotEscrow();
+        require(IERC20(token).transferFrom(payer, escrow, amount), "pull failed");
     }
 }
 

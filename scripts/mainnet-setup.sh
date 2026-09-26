@@ -102,7 +102,7 @@ create() {
 }
 
 log "deploying..."
-create src/Countersign.sol:CountersignCollector; COLLECTOR=$CREATED
+create src/Countersign.sol:CountersignCollector --constructor-args "$ESCROW"; COLLECTOR=$CREATED
 env_set scripts COUNTERSIGN_COLLECTOR "$COLLECTOR"
 create src/Countersign.sol:Countersign --constructor-args "$OWNER" "$ESCROW" "$AGENT" "$ORACLE"; WALLET=$CREATED
 env_set scripts COUNTERSIGN_WALLET "$WALLET"

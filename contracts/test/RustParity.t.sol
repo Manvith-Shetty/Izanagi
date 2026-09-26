@@ -48,7 +48,7 @@ contract RustParityTest is Test {
             "Rust signed for the CREATE2 address we actually deployed");
 
         Countersign cs = Countersign(wallet);
-        CountersignCollector col = new CountersignCollector();
+        CountersignCollector col = new CountersignCollector(ESCROW);
         deal(USDC, wallet, 50_000_000);
         vm.startPrank(OWNER);
         cs.approveToken(USDC, address(col), type(uint256).max);

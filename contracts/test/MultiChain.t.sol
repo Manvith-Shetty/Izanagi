@@ -20,7 +20,7 @@ contract MultiChainTest is Test {
         address agent=vm.addr(aPk); address oracle=vm.addr(oPk); address rAuth=vm.addr(rPk);
         address seller=address(0x5E11E5);
         vm.etch(agent,""); vm.etch(oracle,""); vm.etch(rAuth,""); vm.etch(seller,"");
-        CountersignCollector col = new CountersignCollector();
+        CountersignCollector col = new CountersignCollector(ESCROW);
         Countersign cs = new Countersign(owner, ESCROW, agent, oracle);
         deal(usdc, address(cs), 20_000_000);
         ChannelConfig memory cfg = ChannelConfig({payer:address(cs), payerAuthorizer:address(0),

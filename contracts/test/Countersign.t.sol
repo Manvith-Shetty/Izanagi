@@ -36,7 +36,7 @@ contract CountersignForkTest is Test {
         vm.etch(agent, ""); vm.etch(oracle, ""); vm.etch(rAuth, "");
         vm.etch(vm.addr(evilPk), ""); vm.etch(seller, "");
 
-        collector = new CountersignCollector();
+        collector = new CountersignCollector(ESCROW);
         cs = new Countersign(owner, ESCROW, agent, oracle);
 
         deal(USDC, address(cs), 100_000_000); // 100 USDC of REAL Base USDC
