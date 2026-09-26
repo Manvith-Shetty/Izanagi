@@ -192,7 +192,7 @@ p {
 .receipt .sub {
   color: var(--faded);
   font-size: var(--t-xs);
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 .receipt hr {
   border: 0;

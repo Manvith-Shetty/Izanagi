@@ -32,7 +32,7 @@ Everything runs on **Base mainnet** with real USDC, against Coinbase's deployed 
 | Demo shop (goes rogue after 3 calls) | [`seller-production-18f0.up.railway.app/v1/data`](https://seller-production-18f0.up.railway.app/v1/data) |
 | Backend health | [`tab-production-5655.up.railway.app/api/health`](https://tab-production-5655.up.railway.app/api/health) |
 
-1. **Get your Tab**: verify you're a unique human with World ID (the event's sandbox, from a
+1. **Sign up**: verify you're a unique human with World ID (the event's sandbox, from a
    browser), then create your own Countersign wallet from MetaMask. It's yours from the first
    block: only your MetaMask can ever take money out.
 2. **Add money** from MetaMask: a few USDC on Base.
@@ -188,21 +188,20 @@ the payer's Countersign wallet revoked this seller at 1790424567 (reason: wallet
 - after we had served the requests
 ```
 
-#### Feedback on the Intercepta API
+#### My feedback on the Intercepta API
 
-1. **`/analysis/signature` scores a stringified `message` as Low without saying so.** It only
-   scores typed data sent as a JSON object. A string should get a 400 error, not a clean score.
-2. **There is no way to learn that a score changed.** Our re-screening loop has to poll every open
-   tab. A webhook or subscription for addresses we watch would turn a polling loop into instant
-   revocation.
-3. **There is no batch endpoint.** Re-screening N open tabs costs N quick-scans per round, so rate
-   limits end up deciding how fast we can revoke.
-4. **The data covers mainnet only.** That suited us, since we run on Base mainnet. Teams paying on
-   a testnet have to screen a mainnet address in its place. An explicit "network not covered"
-   answer would make that impossible to get wrong.
-5. **What worked well:** a request with a wrong or missing key gets a clear 403, so we could check
-   that every endpoint path was real before we had a key. And `traits[]` gave us a readable reason
-   to show a person, beyond the bare score.
+- **Time to first call:** a bit over an hour.
+- **What confused me:** the product is called Intercepta, but the docs and the API live under
+  web3antivirus (`docs.web3antivirus.io`, `api.web3antivirus.io`), and every path has
+  `/extension/` in it. At first I wasn't sure I was even in the right place. The 403 you get with a
+  bad key helped, because it let me check the paths were real before my key worked.
+- **Also confusing:** `/analysis/signature` gave me a Low score when I sent the message as a string.
+  It only scores it properly as a JSON object, and nothing tells you that. I'd rather get an error.
+- **What was missing:** a way to get told when a score changes. I re-screen every open tab in a
+  loop, so I have to keep polling. A webhook for the addresses I'm watching would let me stop a
+  seller the moment it goes bad. A batch endpoint would help too, so one round isn't N calls.
+- **Small thing:** the data is mainnet only. Fine for me since I run on Base mainnet, but a clear
+  "network not covered" answer would save testnet teams from getting it wrong.
 
 ### World — the human gate
 
@@ -245,20 +244,19 @@ acr_values_supported           [https://world.org/oidc/acr/orb-v3]
   JWKS; the client secret never leaves the countersigner. The agent receives an opaque
   approval handle and a yes/no — never the OAuth `device_code`, and never the subject.
 
-#### Integration debrief: World ID for Agents
+#### My integration debrief: World ID for Agents
 
-- **First success:** device grant against `sandbox.auth.world.org`, `id_token` verified against
-  the JWKS, approval bound to a voucher digest.
-- **Friction:** the device grant, which is the flow a headless agent needs, exists only on the
-  sandbox. Production `id.worldcoin.org` offers only `authorization_code` and `implicit`, so a
-  production port has to send the person a login link instead of a short code.
-- **Missing docs:** the docs don't say whether a device-grant `id_token` always carries `acr`,
-  so we enforce the Orb credential only when it's there. We also found no example of binding an
-  approval to one specific action, so we bind it to the voucher digest ourselves.
-- **Top improvement:** offer the device grant in production, and let the client attach a
-  human-readable "you are approving" message (seller, amount) that World App shows on the
-  approval screen. Then the person sees exactly what they are signing for on World's own
-  screen, not only on ours.
+- **Time to first success:** about 1-2 hours to the first approval checked on my backend (phone
+  code on the event sandbox, `id_token` checked against World's keys).
+- **Friction:** the phone-code flow (device grant) is exactly what a headless agent needs, but it's
+  only on the sandbox. Production `id.worldcoin.org` doesn't have it, only the normal login flows.
+  So to go live I'd have to send people a login link instead of a short code.
+- **Missing docs:** I couldn't find whether the device-flow `id_token` always has `acr`, so I only
+  check for Orb when it's there. I also didn't find any example of tying an approval to one
+  specific action, like one payment. I tie it to the payment's hash myself.
+- **One improvement that would help most:** put the device flow in production, and let me send a
+  short line like "you're approving $0.05 to hyperextend" that shows up in World App. Then people
+  see what they're approving on World's own screen, not only on mine.
 
 ---
 
