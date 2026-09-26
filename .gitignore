@@ -1,0 +1,22 @@
+target/
+out/
+cache/
+broadcast/
+node_modules/
+**/.env
+**/.env.*
+!**/.env.example
+lib/forge-std/
+contracts/fixture.json
+
+# tab/web frontend
+tab/web/dist/
+tab/web/temporary screenshots/
+tab/ui/dist/
+tab/ui/temporary screenshots/
+
+# local only
+.claude/
+CLAUDE.md
+.state/
+*.tsbuildinfo
