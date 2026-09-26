@@ -32,14 +32,14 @@ Everything runs on **Base mainnet** with real USDC, against Coinbase's deployed 
 | Demo shop (goes rogue after 3 calls) | `https://REPLACE-with-the-seller-domain/v1/data` |
 | Backend health | `https://REPLACE-with-the-tab-domain/api/health` |
 
-1. **Get your free Tab**: verify you're a unique human with World ID (the event's sandbox, from
-   a browser) and get your own Countersign wallet with $0.25 of USDC.
-2. **Connect your AI**: the dashboard gives you a personal MCP link. Add it to Claude, then ask
+1. **Get your Tab**: verify you're a unique human with World ID (the event's sandbox, from a
+   browser), then create your own Countersign wallet from MetaMask. It's yours from the first
+   block: only your MetaMask can ever take money out.
+2. **Add money** from MetaMask: a few USDC on Base.
+3. **Connect your AI**: the dashboard gives you a personal MCP link. Add it to Claude, then ask
    *"Use Tab to get the latest Bitcoin price from hyperextend."*
-3. **Watch it stop**: buy from the demo shop until it turns rogue, then **Close tab**. The shop
+4. **Watch it stop**: buy from the demo shop until it turns rogue, then **Close tab**. The shop
    can no longer collect for calls it already served.
-4. **Make it yours** (optional): add USDC from MetaMask, approve with World ID, and only your
-   MetaMask can take money out.
 
 ---
 
@@ -83,17 +83,59 @@ a day for the real sellers we paid.
 
 ### Your money, your keys
 
-A free trial wallet is owned by the operator's treasury. When you add money from MetaMask, the
-server checks the USDC transfer on chain and asks **your** World ID to approve handing the wallet
-to the account that sent it. Then `transferOwnership` moves every owner power to that account:
-withdrawals, keys, the collector. A stolen login cannot claim your wallet for someone else's
-account, because only the World ID bound to the wallet at signup can approve.
+You create your wallet yourself: your MetaMask sends the transaction that deploys it, with your
+account as `owner` from the first block. The operator holds no key that owns or funds anyone's
+wallet, so there is nothing to hand over and nothing of yours on its servers to steal.
+
+Before building that transaction, the server asks your MetaMask to sign one message naming your
+signup, and afterwards it accepts only a deployment sent by that same account, of exactly our
+contract wired to our agent, oracle and collector. So nobody can claim a wallet somebody else just
+created, and your World ID is tied only to the wallet your own account made.
 
 The agent opens tabs through the wallet's own `openTab`, which approves the deposit collector for
 exactly that deposit and resets it to zero. The collector itself only moves funds into a channel
 the wallet gates (`payerAuthorizer == 0`). Without that check, anyone could open a channel funded
 by a standing allowance, name themselves its authorizer, and claim it: we found that on a fork of
 the real escrow, and [`TabFlow.t.sol`](contracts/test/TabFlow.t.sol) keeps it closed.
+
+---
+
+## Architecture
+
+```
+  you: browser + MetaMask ──────────► website (Vercel · tab/web)
+     │                                    │  /api, proxied: one origin, first-party login cookie
+     │ creates, owns and funds            ▼
+     │ your own wallet               tab (Railway) ◄──── MCP ──── your AI (Claude)
+     │                                    │  builds your transactions; the agent key opens
+     │                                    │  tabs and signs vouchers
+     │                                    ▼
+     │                          countersigner (Railway, private network only)
+     │                            Intercepta screening · World ID · the oracle key ·
+     │                            re-screens open tabs and revokes on chain
+     ▼                                    │
+  Countersign wallet (Base) ◄─────────────┘  revoke / pause
+     │  payer of every tab; EIP-1271 gate at claim time
+     ▼
+  Coinbase x402 escrow (Base) ◄──── claims ──── sellers: hyperextend, onesource, our demo shop
+```
+
+| Piece | Runs on | Holds | Can it move your money? |
+|---|---|---|---|
+| Your Countersign wallet | Base | nothing: your MetaMask owns it from the block that created it | only with both signatures, or when you withdraw |
+| Website | Vercel | no keys | no |
+| `tab` | Railway | the agent key | no: every voucher also needs the oracle |
+| `countersigner` | Railway, private | the oracle key, Intercepta and World secrets | no: it can only refuse, or revoke |
+| `seller` (demo shop) | Railway | its claim key | only cashes in vouchers your wallet accepts |
+| Deposit collector | Base | no keys | only into a tab your own wallet gates |
+
+**Signing up**: World ID proves you are a unique human → your MetaMask signs a message naming
+this signup (free) → your MetaMask sends the transaction that creates your wallet → Tab checks
+on chain that exactly that account created exactly our contract, and the countersigner ties the
+wallet to your World ID. **Paying**: your AI asks `tab` → the countersigner screens the seller
+and the voucher, and asks you through World ID above your limit → the agent opens a tab from your
+wallet if needed and pays with a countersigned voucher → the seller cashes in later, through the
+escrow, which asks your wallet.
 
 ---
 
@@ -194,10 +236,11 @@ acr_values_supported           [https://world.org/oidc/acr/orb-v3]
 All tests run against the **real deployed escrow on real mainnet forks** with real USDC.
 
 ```
-contracts:  39 passed, 0 failed     (Base, Optimism, Arbitrum forks)
-rust:      139 passed, 0 failed
+contracts:  40 passed, 0 failed     (Base, Optimism, Arbitrum forks)
+rust:      137 passed, 0 failed
 seller e2e:  1 passed, 0 failed     (Base fork, real escrow, over HTTP)
-tab e2e:     1 passed, 0 failed     (Base fork: trial → tab → handover → every cent back)
+tab e2e:     1 passed, 0 failed     (Base fork: your account creates the wallet → tabs → every cent back)
+mainnet:     Tab's own code on Base, real USDC, a real seller (below)
 ```
 
 The seller's end-to-end test drives its real HTTP router and claim loop against a Base fork
@@ -213,8 +256,24 @@ over-balance · revocation before signing · **revocation after signing** · un-
 agent cannot revoke · agent cannot withdraw · oracle cannot withdraw · owner recovery with
 the oracle absent · direct claim by the seller · claim-before-revoke is final · a stranger
 routing the wallet's allowance into a channel they authorise · the agent opening an ungated
-or long-locked channel · no allowance left standing after a tab · a handover moving every
-owner power, once, only for the owner the wallet's human approved.
+or long-locked channel · no allowance left standing after a tab · a wallet that works from the
+transaction creating it · a stranger claiming someone else's new wallet · a wallet wired to
+other keys passed off as ours · ownership moving only when its owner moves it.
+
+**On Base mainnet, through Tab's own code** ([`mainnet_wallet.rs`](tab/tests/mainnet_wallet.rs), Sep 27, 2026):
+
+| Step | Transaction |
+|---|---|
+| A person's own account creates their wallet ([`0x4881…601b`](https://basescan.org/address/0x48818697fc650875dae7442648e0891fabe8601b)), and Tab's check accepts it | [`0x7814…b85e`](https://basescan.org/tx/0x78145568835bdcd08fc8006b74839218ea29f8adda6be3eb10b399a20cc85b8e) |
+| They add 0.02 USDC | [`0xdffa…5d28`](https://basescan.org/tx/0xdffaf3cb427fbd4ebf639837c4fdeb918cdcd7974e2bb0e431cc28f5c0935d28) |
+| Tab buys a real BTC candle from hyperextend: screened by Intercepta, countersigned, the tab opened through `openTab`, no allowance left | [`0xc2b0…a86d`](https://basescan.org/tx/0xc2b0aa6554de6e294c57b18c1fe1882de4a30a78faeecca40693bab5737ba86d) |
+| Closing the tab revokes hyperextend on the wallet | [`0x3103…1994`](https://basescan.org/tx/0x310343a3cc51ceb658faf8172739b59fcdbee605d011477b300d9aba4dba1994) |
+
+hyperextend served the data and holds a signed voucher for it, but claimed nothing before the
+revocation, so it now never can: the tab's whole 0.005 USDC goes back to its owner. The run also
+found two bugs, both fixed: a rate-limited RPC used to cancel a revocation (every service now
+retries with backoff), and the escrow counts the withdraw delay from when a withdrawal starts,
+not from the time it reports.
 
 Plus:
 - **Cross-language parity** — signatures produced by the Rust countersigner are accepted by
@@ -262,7 +321,7 @@ seller/         x402 batch-settlement seller: screens payers, verifies vouchers 
                 EIP-1271, cashes them in through the escrow
 scripts/        fork-setup.sh: deploy Countersign on a Base fork and open a channel;
                 railway-setup.sh: generate and fund the production config
-tab/            the Izanagi server: API, MCP endpoint, a wallet per person, handovers
+tab/            the Izanagi server: API, MCP endpoint, sign-up, the tabs each person's AI opens
 tab/web/        the website (Vercel): sign-up, dashboard, World ID approvals, MetaMask
 ```
 
@@ -283,7 +342,8 @@ was invoked from, so the per-crate files are the single source of truth.
 | [`countersigner/.env.example`](countersigner/.env.example) | every secret and every threshold |
 | [`agent/.env.example`](agent/.env.example) | one key, and no authority |
 | [`seller/.env.example`](seller/.env.example) | the x402 endpoint, its payer thresholds and claim policy |
-| [`tab/src/env.rs`](tab/src/env.rs) | Tab has no local example: it runs on Railway, and [`railway-setup.sh`](scripts/railway-setup.sh) writes its variables |
+| [`tab/.env.example`](tab/.env.example) | the agent key, where the countersigner and the website are; no key that owns or funds a wallet |
+| [`scripts/.env.example`](scripts/.env.example) | your own keys for the setup scripts, and the production deploy's addresses |
 
 A missing or malformed key names itself at startup rather than failing halfway through a
 payment:

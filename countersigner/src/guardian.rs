@@ -11,6 +11,8 @@
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, TxHash};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
+use alloy::rpc::client::ClientBuilder;
+use alloy::transports::layers::RetryBackoffLayer;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{anyhow, Context, Result};
 use common::escrow::ICountersign;
@@ -37,10 +39,12 @@ impl Guardian {
         let signer: PrivateKeySigner = oracle_key.trim().trim_start_matches("0x").parse()
             .context("ORACLE_PRIVATE_KEY is not a private key")?;
         let oracle = signer.address();
-        let provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::from(signer))
-            .connect_http(rpc.parse().context("BASE_RPC is not a URL")?)
-            .erased();
+        // public RPCs rate-limit (HTTP 429) under load: retry with backoff rather than let a
+        // busy endpoint cancel a revocation. Up to 8 retries, starting at 800ms.
+        let client = ClientBuilder::default()
+            .layer(RetryBackoffLayer::new(8, 800, 100))
+            .http(rpc.parse().context("BASE_RPC is not a URL")?);
+        let provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer)).connect_client(client).erased();
         Ok(Self { provider, oracle })
     }
 
@@ -55,7 +59,7 @@ impl Guardian {
             .riskOracle()
             .call()
             .await
-            .with_context(|| format!("{wallet:#x} is not a Countersign wallet"))?;
+            .with_context(|| format!("could not read {wallet:#x}'s risk oracle (is it a Countersign wallet?)"))?;
         Ok(oracle == self.oracle)
     }
 

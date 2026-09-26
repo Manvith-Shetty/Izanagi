@@ -267,10 +267,6 @@ impl App {
                 format!("resume paying {}", short_addr(&format!("{:#x}", a.seller))),
             ),
             Purpose::Enroll => (format!("Sign up · {}", a.user_code), "a new Tab account".to_string()),
-            Purpose::Handover => (
-                format!("Make the wallet yours · {}", a.user_code),
-                format!("only {} can take money out", short_addr(&format!("{:#x}", a.seller))),
-            ),
         };
         // a stranger signing up is not news to the operator's phone
         if a.purpose != Purpose::Enroll && self.pushes_for(a.wallet) {

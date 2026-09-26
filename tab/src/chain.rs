@@ -5,19 +5,20 @@
 //!   * the **agent** key opens tabs: it asks the wallet to `openTab`, which approves the collector
 //!     for exactly that deposit and moves the wallet's own funds into a channel whose payer is
 //!     that same wallet. It cannot send funds anywhere else, and no allowance is left standing.
-//!   * the **treasury** key deploys each person's Countersign wallet, owns it, and funds their
-//!     trial. It is the "bring your own owner" slot, filled by Tab for the free trial, and it
-//!     hands the wallet over to the person the first time they add money of their own.
+//!
+//! Tab holds no key that owns or funds anyone's wallet. A person's own wallet app (MetaMask)
+//! creates their Countersign wallet, owns it from the first block, and adds its money; Tab only
+//! builds those transactions, and checks on chain that they did what they should.
 //!
 //! Public RPCs load-balance across nodes that can disagree for a moment about an account's next
 //! nonce, and they rate-limit. So every read retries on a 429, and each key sends one
 //! transaction at a time with its nonce tracked locally.
 
-use alloy::network::{EthereumWallet, TransactionBuilder};
+use alloy::consensus::Transaction as _;
+use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, Bytes, TxHash, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::client::ClientBuilder;
-use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::{SolCall, SolValue};
 use alloy::transports::layers::RetryBackoffLayer;
@@ -38,8 +39,17 @@ const COUNTERSIGN_BIN: &str = include_str!("../assets/Countersign.bin");
 pub struct OnChainTab {
     pub balance: u128,
     pub total_claimed: u128,
-    /// Non-zero while the wallet's owner is taking money back out.
-    pub withdraw_finalize_after: u64,
+    /// When the owner started taking money back out; zero if they have not. The escrow counts
+    /// the channel's `withdrawDelay` from here: finishing any earlier reverts
+    /// (`WithdrawDelayNotElapsed`, seen on Base mainnet).
+    pub withdraw_started_at: u64,
+}
+
+impl OnChainTab {
+    /// When a withdrawal the owner started can be finished, given the channel's delay.
+    pub fn withdraw_ready_at(&self, withdraw_delay: u64) -> Option<u64> {
+        (self.withdraw_started_at != 0).then(|| self.withdraw_started_at + withdraw_delay)
+    }
 }
 
 /// A person's wallet, as the chain describes it.
@@ -55,9 +65,7 @@ pub struct WalletState {
 pub struct Chain {
     read: DynProvider,
     agent: Mutex<DynProvider>,
-    treasury: Mutex<DynProvider>,
     pub agent_address: Address,
-    pub treasury_address: Address,
     pub collector: Address,
 }
 
@@ -80,16 +88,13 @@ fn signing(rpc: &str, key: &str, name: &str) -> Result<(DynProvider, Address)> {
 }
 
 impl Chain {
-    pub fn new(rpc: &str, agent_key: &str, treasury_key: &str, collector: Address) -> Result<Self> {
+    pub fn new(rpc: &str, agent_key: &str, collector: Address) -> Result<Self> {
         let read = ProviderBuilder::new().connect_client(client(rpc)?).erased();
         let (agent, agent_address) = signing(rpc, agent_key, "AGENT_PRIVATE_KEY")?;
-        let (treasury, treasury_address) = signing(rpc, treasury_key, "TAB_TREASURY_KEY")?;
         Ok(Self {
             read,
             agent: Mutex::new(agent),
-            treasury: Mutex::new(treasury),
             agent_address,
-            treasury_address,
             collector,
         })
     }
@@ -103,7 +108,7 @@ impl Chain {
         Ok(OnChainTab {
             balance: c.balance,
             total_claimed: c.totalClaimed,
-            withdraw_finalize_after: w.finalizeAfter.to::<u64>(),
+            withdraw_started_at: w.finalizeAfter.to::<u64>(),
         })
     }
 
@@ -148,74 +153,39 @@ impl Chain {
         Ok(receipt.transaction_hash)
     }
 
-    /* -------------------------------- the treasury -------------------------------- */
+    /* ------------------------------ a person's wallet ------------------------------ */
 
-    /// Deploy a Countersign wallet: owned by the treasury, spent by the agent key, guarded by
-    /// the countersigner's oracle.
-    pub async fn deploy_wallet(&self, oracle: Address) -> Result<(Address, TxHash)> {
+    /// The creation code of a person's wallet: owned by `owner` from the first block, spent by
+    /// the agent key, guarded by the countersigner's `oracle`, opening tabs through our collector.
+    pub fn wallet_initcode(&self, owner: Address, oracle: Address) -> Result<Bytes> {
         let code = hex(COUNTERSIGN_BIN.trim())?;
-        let args = (self.treasury_address, ESCROW, self.agent_address, oracle).abi_encode_params();
-        let init: Bytes = [code, args].concat().into();
-        let p = self.treasury.lock().await;
-        let tx = TransactionRequest::default().with_deploy_code(init);
-        let receipt = p
-            .send_transaction(tx)
-            .await
-            .context("sending the wallet deployment")?
-            .get_receipt()
-            .await
-            .context("waiting for the deployment receipt")?;
-        if !receipt.status() {
-            return Err(anyhow!("deployment {} reverted", receipt.transaction_hash));
-        }
-        let wallet = receipt.contract_address.ok_or_else(|| anyhow!("deployment receipt has no contract address"))?;
-        Ok((wallet, receipt.transaction_hash))
+        let args = (owner, ESCROW, self.agent_address, oracle, self.collector).abi_encode_params();
+        Ok([code, args].concat().into())
     }
 
-    /// Give a new wallet its trial: `amount` of USDC, and the collector its agent opens tabs through.
-    pub async fn fund_wallet(&self, wallet: Address, amount: u128) -> Result<(TxHash, TxHash)> {
-        let p = self.treasury.lock().await;
-        let usdc = IERC20Write::new(USDC_BASE, &*p);
-        let t1 = usdc.transfer(wallet, U256::from(amount)).send().await.context("sending the trial USDC")?
-            .get_receipt().await.context("waiting for the transfer")?;
-        if !t1.status() {
-            return Err(anyhow!("trial transfer {} reverted", t1.transaction_hash));
+    /// The wallet a person's transaction created, once it has landed. Accepted only if `owner`
+    /// sent it and it deployed exactly the wallet `wallet_initcode(owner, oracle)` describes, so
+    /// nobody can claim a wallet somebody else created, or one wired to other keys.
+    pub async fn created_wallet(&self, tx: TxHash, owner: Address, oracle: Address, wait: Duration) -> Result<Address> {
+        let receipt = self.landed(tx, wait).await?;
+        if receipt.from != owner {
+            return Err(anyhow!("{tx:#x} was sent by {:#x}, not by the account you connected ({owner:#x})", receipt.from));
         }
-        let w = ICountersign::new(wallet, &*p);
-        let t2 = w.setCollector(self.collector).send().await
-            .context("setting the wallet's collector")?
-            .get_receipt().await.context("waiting for the collector")?;
-        if !t2.status() {
-            return Err(anyhow!("setting the collector {} reverted", t2.transaction_hash));
+        let wallet = receipt.contract_address.ok_or_else(|| anyhow!("{tx:#x} created no contract"))?;
+        let sent = self
+            .read
+            .get_transaction_by_hash(tx)
+            .await
+            .context("reading the transaction")?
+            .ok_or_else(|| anyhow!("{tx:#x} not found"))?;
+        if sent.input() != &self.wallet_initcode(owner, oracle)? {
+            return Err(anyhow!("{tx:#x} did not create a Tab wallet: its code or keys differ"));
         }
-        Ok((t1.transaction_hash, t2.transaction_hash))
+        Ok(wallet)
     }
 
-    /// Hand a trial wallet to `to`. Only while the treasury still owns it: once a person owns
-    /// their wallet, Tab has no say over it, and this is refused rather than attempted.
-    pub async fn hand_over(&self, wallet: Address, to: Address) -> Result<TxHash> {
-        let owner = ICountersign::new(wallet, &self.read).owner().call().await.context("reading the owner")?;
-        if owner != self.treasury_address {
-            return Err(anyhow!("this wallet already belongs to {owner:#x}"));
-        }
-        let p = self.treasury.lock().await;
-        let receipt = ICountersign::new(wallet, &*p)
-            .transferOwnership(to)
-            .send()
-            .await
-            .context("sending the handover")?
-            .get_receipt()
-            .await
-            .context("waiting for the handover")?;
-        if !receipt.status() {
-            return Err(anyhow!("handover {} reverted", receipt.transaction_hash));
-        }
-        Ok(receipt.transaction_hash)
-    }
-
-    /// The USDC a transaction sent to `wallet`, and who sent it: the account that signed the
-    /// transaction and whose own USDC moved. Waits for the transaction to land.
-    pub async fn deposit_into(&self, wallet: Address, tx: TxHash, wait: Duration) -> Result<Deposit> {
+    /// A transaction's receipt once it has landed, and succeeded.
+    async fn landed(&self, tx: TxHash, wait: Duration) -> Result<alloy::rpc::types::TransactionReceipt> {
         let deadline = tokio::time::Instant::now() + wait;
         let receipt = loop {
             if let Some(r) = self.read.get_transaction_receipt(tx).await.context("reading the receipt")? {
@@ -227,8 +197,15 @@ impl Chain {
             tokio::time::sleep(Duration::from_secs(2)).await;
         };
         if !receipt.status() {
-            return Err(anyhow!("{tx:#x} failed on chain: no money moved"));
+            return Err(anyhow!("{tx:#x} failed on chain"));
         }
+        Ok(receipt)
+    }
+
+    /// The USDC a transaction sent to `wallet`, and who sent it: the account that signed the
+    /// transaction and whose own USDC moved. Waits for the transaction to land.
+    pub async fn deposit_into(&self, wallet: Address, tx: TxHash, wait: Duration) -> Result<Deposit> {
+        let receipt = self.landed(tx, wait).await?;
         let amount: U256 = receipt
             .inner
             .logs()
@@ -260,16 +237,23 @@ pub struct Deposit {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerTx {
-    pub to: Address,
+    /// Absent when the transaction creates a contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<Address>,
     pub data: Bytes,
     pub label: String,
 }
 
 impl OwnerTx {
+    /// Create the person's wallet from its creation code (`Chain::wallet_initcode`).
+    pub fn create_wallet(initcode: Bytes) -> Self {
+        Self { to: None, data: initcode, label: "Create your Tab wallet".into() }
+    }
+
     /// Send `amount` of USDC from the person's account to their Tab wallet.
     pub fn deposit(wallet: Address, amount: u128) -> Self {
         let data = IERC20Write::transferCall { to: wallet, amount: U256::from(amount) }.abi_encode();
-        Self { to: USDC_BASE, data: data.into(), label: "Add money to your Tab".into() }
+        Self { to: Some(USDC_BASE), data: data.into(), label: "Add money to your Tab".into() }
     }
 
     /// Everything the owner signs to take their money out: start withdrawing each tab that still
@@ -278,19 +262,19 @@ impl OwnerTx {
         let mut txs = Vec::new();
         for (cfg, on, name) in tabs {
             let left = on.balance.saturating_sub(on.total_claimed);
-            if on.withdraw_finalize_after != 0 {
-                if now >= on.withdraw_finalize_after {
+            if let Some(ready) = on.withdraw_ready_at(cfg.withdrawDelay.to::<u64>()) {
+                if now >= ready {
                     let data = ICountersign::finalizeWithdrawCall { cfg: cfg.into() }.abi_encode();
-                    txs.push(Self { to: wallet, data: data.into(), label: format!("Take back what's left in your tab with {name}") });
+                    txs.push(Self { to: Some(wallet), data: data.into(), label: format!("Take back what's left in your tab with {name}") });
                 }
             } else if left > 0 {
                 let data = ICountersign::initiateWithdrawCall { cfg: cfg.into(), amount: left }.abi_encode();
-                txs.push(Self { to: wallet, data: data.into(), label: format!("Start taking back your tab with {name}") });
+                txs.push(Self { to: Some(wallet), data: data.into(), label: format!("Start taking back your tab with {name}") });
             }
         }
         if idle > 0 {
             let data = ICountersign::sweepCall { token: USDC_BASE, to: owner, amount: U256::from(idle) }.abi_encode();
-            txs.push(Self { to: wallet, data: data.into(), label: "Send your wallet's balance to you".into() });
+            txs.push(Self { to: Some(wallet), data: data.into(), label: "Send your wallet's balance to you".into() });
         }
         txs
     }
@@ -327,24 +311,25 @@ mod tests {
     fn a_deposit_is_a_usdc_transfer_to_the_wallet() {
         let wallet = Address::repeat_byte(0x77);
         let tx = OwnerTx::deposit(wallet, 5_000_000);
-        assert_eq!(tx.to, USDC_BASE);
+        assert_eq!(tx.to, Some(USDC_BASE));
         let call = IERC20Write::transferCall::abi_decode(&tx.data).unwrap();
         assert_eq!((call.to, call.amount), (wallet, U256::from(5_000_000u64)));
     }
 
     #[test]
     fn taking_money_out_starts_finishes_and_sweeps() {
-        let (wallet, owner, now) = (Address::repeat_byte(0x77), Address::repeat_byte(0xb0), 1_000);
-        let tab = |balance, claimed, after| OnChainTab { balance, total_claimed: claimed, withdraw_finalize_after: after };
+        // every tab here has a one-day withdraw delay, counted from when the withdrawal started
+        let (wallet, owner, now) = (Address::repeat_byte(0x77), Address::repeat_byte(0xb0), 200_000);
+        let tab = |balance, claimed, started| OnChainTab { balance, total_claimed: claimed, withdraw_started_at: started };
         let tabs = vec![
-            (cfg(wallet, 1), tab(50_000, 20_000, 0), "open".to_string()),     // start: 30_000 left
-            (cfg(wallet, 2), tab(50_000, 50_000, 0), "spent".to_string()),    // nothing left: skipped
-            (cfg(wallet, 3), tab(50_000, 0, 900), "ready".to_string()),       // wait over: finish
-            (cfg(wallet, 4), tab(50_000, 0, 5_000), "waiting".to_string()),   // still waiting: skipped
+            (cfg(wallet, 1), tab(50_000, 20_000, 0), "open".to_string()),         // start: 30_000 left
+            (cfg(wallet, 2), tab(50_000, 50_000, 0), "spent".to_string()),        // nothing left: skipped
+            (cfg(wallet, 3), tab(50_000, 0, 100_000), "ready".to_string()),       // a day has passed: finish
+            (cfg(wallet, 4), tab(50_000, 0, 150_000), "waiting".to_string()),     // started a moment ago: wait
         ];
         let txs = OwnerTx::withdraw(wallet, owner, 70_000, &tabs, now);
         assert_eq!(txs.len(), 3, "{txs:#?}");
-        assert!(txs.iter().all(|t| t.to == wallet));
+        assert!(txs.iter().all(|t| t.to == Some(wallet)));
 
         let start = ICountersign::initiateWithdrawCall::abi_decode(&txs[0].data).unwrap();
         assert_eq!(start.amount, 30_000);

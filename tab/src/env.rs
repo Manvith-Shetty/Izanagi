@@ -2,8 +2,9 @@
 //!
 //! Tab is the product people and agents touch: the dashboard, the approval page, the MCP
 //! server. Note what it does NOT hold: no Intercepta key, no World client secret, no
-//! countersigning key. It holds the agent's key -- which alone cannot move money -- and the
-//! token that lets it ask the countersigner to stop a payment, never to start one.
+//! countersigning key, and no key that owns or funds anyone's wallet: people create and fund
+//! their own. It holds the agent's key -- which alone cannot move money -- and the token that
+//! lets it ask the countersigner to stop a payment, never to start one.
 
 use alloy::primitives::Address;
 use common::utils::get_from_env_unsafe;
@@ -24,16 +25,9 @@ pub struct TabEnv {
     /// The agent's hot key. Signs vouchers (useless without a countersignature) and pays the
     /// gas to open tabs, which the wallet funds from its own balance through the collector.
     pub agent_private_key: String,
-    /// Deploys each person's Countersign wallet, owns it, and funds their trial. Tab's treasury
-    /// holds the owner role only until the person adds money of their own, then hands it over.
-    pub treasury_key: String,
     /// The shared deposit collector every wallet opens tabs through (it only moves a wallet's
     /// own funds into channels that wallet gates, and only what the wallet approves per tab).
     pub collector: Address,
-    /// USDC each new person's wallet starts with, atomic (6 decimals).
-    pub trial_amount: u128,
-    /// Stop creating trial wallets after this many, whatever happens.
-    pub trial_max_accounts: usize,
     pub chain_id: u64,
     pub rpc: String,
     /// Mainnet data for the network census, even when payments run on a fork.
@@ -58,10 +52,7 @@ impl std::fmt::Debug for TabEnv {
             .field("countersigner_url", &self.countersigner_url)
             .field("control_token", &"<redacted>")
             .field("agent_private_key", &"<redacted>")
-            .field("treasury_key", &"<redacted>")
             .field("collector", &self.collector)
-            .field("trial_amount", &self.trial_amount)
-            .field("trial_max_accounts", &self.trial_max_accounts)
             .field("chain_id", &self.chain_id)
             .field("rpc", &self.rpc)
             .field("tab_deposit", &self.tab_deposit)
@@ -112,10 +103,7 @@ impl TabEnv {
                 .to_string(),
             control_token: secret("CONTROL_TOKEN")?.ok_or("CONTROL_TOKEN env not found: Tab needs the countersigner's operator token")?,
             agent_private_key: get_from_env_unsafe("AGENT_PRIVATE_KEY")?,
-            treasury_key: get_from_env_unsafe("TAB_TREASURY_KEY")?,
             collector: collector.ok_or("COUNTERSIGN_COLLECTOR env not found: every wallet approves one shared collector")?,
-            trial_amount: get_from_env_unsafe("TAB_TRIAL_AMOUNT").unwrap_or(250_000), // 0.25 USDC
-            trial_max_accounts: get_from_env_unsafe("TAB_TRIAL_MAX_ACCOUNTS").unwrap_or(40),
             chain_id: get_from_env_unsafe("CHAIN_ID").unwrap_or(8453),
             census_rpc: non_empty("CENSUS_RPC").unwrap_or_else(|| "https://mainnet.base.org".into()),
             rpc,
@@ -153,7 +141,6 @@ mod tests {
     fn required() {
         std::env::set_var("CONTROL_TOKEN", "a-long-enough-control-token");
         std::env::set_var("AGENT_PRIVATE_KEY", "0x2");
-        std::env::set_var("TAB_TREASURY_KEY", "0x3");
         std::env::set_var("COUNTERSIGN_COLLECTOR", "0x1111111111111111111111111111111111111111");
         for k in ["TAB_PUBLIC_URL", "TAB_API_URL", "TAB_BIND"] {
             std::env::remove_var(k);
@@ -164,8 +151,8 @@ mod tests {
     fn required_keys_are_named_when_missing() {
         let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
         required();
-        std::env::remove_var("TAB_TREASURY_KEY");
-        assert!(TabEnv::new().unwrap_err().contains("TAB_TREASURY_KEY"));
+        std::env::remove_var("AGENT_PRIVATE_KEY");
+        assert!(TabEnv::new().unwrap_err().contains("AGENT_PRIVATE_KEY"));
         required();
         std::env::remove_var("COUNTERSIGN_COLLECTOR");
         assert!(TabEnv::new().unwrap_err().contains("COUNTERSIGN_COLLECTOR"));
@@ -188,7 +175,7 @@ mod tests {
         let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
         required();
         std::env::set_var("TAB_PUBLIC_URL", "https://tab.example/");
-        std::env::set_var("TAB_TREASURY_KEY", "0xtreasury-secret");
+        std::env::set_var("AGENT_PRIVATE_KEY", "0xagent-secret");
         let e = TabEnv::new().unwrap();
         assert_eq!(e.mcp_url("tok_123"), "https://tab.example/mcp/tok_123");
         std::env::set_var("TAB_API_URL", "https://api.tab.example/");
@@ -197,7 +184,7 @@ mod tests {
         assert_eq!(split.public_url, "https://tab.example");
         std::env::remove_var("TAB_API_URL");
         let d = format!("{e:?}");
-        assert!(!d.contains("treasury-secret") && !d.contains("a-long-enough-control-token"), "{d}");
+        assert!(!d.contains("agent-secret") && !d.contains("a-long-enough-control-token"), "{d}");
         std::env::remove_var("TAB_PUBLIC_URL");
         required();
     }

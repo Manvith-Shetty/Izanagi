@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
         public = %app.env.public_url,
         api = %app.env.api_url,
         agent = %app.chain.agent_address,
-        treasury = %app.chain.treasury_address,
+        collector = %app.chain.collector,
         "Tab listening on http://{bind}"
     );
     let listener = tokio::net::TcpListener::bind(&bind).await?;

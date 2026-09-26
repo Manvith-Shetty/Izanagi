@@ -21,7 +21,7 @@ contract MultiChainTest is Test {
         address seller=address(0x5E11E5);
         vm.etch(agent,""); vm.etch(oracle,""); vm.etch(rAuth,""); vm.etch(seller,"");
         CountersignCollector col = new CountersignCollector(ESCROW);
-        Countersign cs = new Countersign(owner, ESCROW, agent, oracle);
+        Countersign cs = new Countersign(owner, ESCROW, agent, oracle, address(0));
         deal(usdc, address(cs), 20_000_000);
         ChannelConfig memory cfg = ChannelConfig({payer:address(cs), payerAuthorizer:address(0),
             receiver:seller, receiverAuthorizer:rAuth, token:usdc, withdrawDelay:15 minutes, salt:bytes32(uint256(3))});

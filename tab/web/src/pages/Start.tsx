@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, left, type Stage } from "../api";
 import { Brand, Qr, useCountdown } from "../components/bits";
+import { connect, explain, send, sign } from "../metamask";
 
-const STEPS = ["verify with World ID", "deploying your wallet", "binding it to your World ID", "adding your free trial funds"];
+const STEPS = ["verify with World ID", "create your wallet with MetaMask", "tie it to your World ID"];
 
 function Verifying({ stage }: { stage: Extract<Stage, { stage: "verifying" }> }) {
   const secs = useCountdown(stage.expires_at);
@@ -22,6 +23,50 @@ function Verifying({ stage }: { stage: Extract<Stage, { stage: "verifying" }> })
           <span className="muted" style={{ fontSize: "var(--t-sm)" }}>Expires in {left(secs)}.</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The person's own MetaMask signs for this signup, then creates their wallet and pays for it. */
+function CreateWallet({ id, stage, onStage }: { id: string; stage: Extract<Stage, { stage: "create_wallet" }>; onStage: (s: Stage) => void }) {
+  const [step, setStep] = useState<string>();
+  const [error, setError] = useState<string>();
+
+  const create = async () => {
+    setError(undefined);
+    try {
+      setStep("Connecting MetaMask…");
+      const from = await connect(stage.chain_id);
+      setStep("Sign in MetaMask to say this signup is yours. It costs nothing.");
+      const signature = await sign(from, stage.message);
+      const { tx } = await api.signupWallet(id, from, signature);
+      setStep("Confirm creating your wallet in MetaMask…");
+      const hash = await send(from, tx);
+      setStep("Waiting for your wallet to land on Base…");
+      const r = await api.signupCreated(id, hash);
+      onStage(r.stage);
+    } catch (e) {
+      setError(explain(e));
+      setStep(undefined);
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gap: "1rem" }}>
+      <p>
+        You're verified. Now create your wallet from MetaMask: it belongs to your MetaMask account from the first block, and
+        only that account can ever take money out. Tab never holds a key to it.
+      </p>
+      <div>
+        <button className="btn" onClick={create} disabled={!!step}>
+          Connect MetaMask & create your wallet
+        </button>
+      </div>
+      <p className="muted" style={{ fontSize: "var(--t-sm)" }}>
+        Two MetaMask prompts: a free signature, then the transaction that creates the wallet (a cent or less of ETH on Base).
+      </p>
+      {step && <div className="notice">{step}</div>}
+      {error && <div className="error">{error}</div>}
     </div>
   );
 }
@@ -45,6 +90,11 @@ export default function Start() {
       .catch((e) => setError(e.message));
   };
 
+  const advance = (s: Stage) => {
+    setStage(s);
+    if (s.stage === "ready") setTimeout(() => nav("/app", { replace: true }), s.returning ? 400 : 1200);
+  };
+
   useEffect(() => {
     // already signed in? straight to the dashboard
     api.me().then(() => nav("/app", { replace: true })).catch(() => {
@@ -56,21 +106,27 @@ export default function Start() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // only World ID moves on its own; every later step is the person's
   useEffect(() => {
-    if (!id || !stage || stage.stage === "ready" || stage.stage === "failed") return;
+    if (!id || stage?.stage !== "verifying") return;
     const t = setTimeout(() => {
       api
         .signupPoll(id)
-        .then((r) => {
-          setStage(r.stage);
-          if (r.stage.stage === "ready") setTimeout(() => nav("/app", { replace: true }), r.stage.returning ? 400 : 1200);
-        })
+        .then((r) => advance(r.stage))
         .catch((e) => setError(e.message));
     }, 2000);
     return () => clearTimeout(t);
-  }, [id, stage, nav]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, stage]);
 
-  const current = stage?.stage === "creating" ? STEPS.indexOf(stage.step) : stage?.stage === "ready" ? STEPS.length : 0;
+  const current =
+    stage?.stage === "create_wallet"
+      ? 1
+      : stage?.stage === "creating"
+        ? stage.step.startsWith("tying") ? 2 : 1
+        : stage?.stage === "ready"
+          ? STEPS.length
+          : 0;
 
   return (
     <>
@@ -90,7 +146,8 @@ export default function Start() {
           )}
           {!stage && !error && <p className="muted">Asking World ID for a verification…</p>}
           {stage?.stage === "verifying" && <Verifying stage={stage} />}
-          {stage?.stage === "creating" && <p>You're verified. Setting up your wallet on Base now; this takes a few seconds.</p>}
+          {stage?.stage === "create_wallet" && id && <CreateWallet id={id} stage={stage} onStage={advance} />}
+          {stage?.stage === "creating" && <p>Your wallet is on Base. {stage.step[0].toUpperCase() + stage.step.slice(1)}…</p>}
           {stage?.stage === "ready" && <p>{stage.returning ? "Welcome back. Opening your Tab." : "Your Tab is ready. Opening it."}</p>}
           {stage?.stage === "failed" && (
             <div className="error">
@@ -114,8 +171,8 @@ export default function Start() {
           ))}
           <hr />
           <div className="line total">
-            <span className="what">Free to start</span>
-            <span className="amt">$0.25</span>
+            <span className="what">Owner</span>
+            <span className="amt">you</span>
           </div>
         </div>
       </main>

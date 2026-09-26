@@ -28,6 +28,9 @@ sol! {
         function claim(VoucherClaim[] calldata voucherClaims) external;
         function settle(address receiver, address token) external;
         function channels(bytes32) external view returns (uint128 balance, uint128 totalClaimed);
+        /// Despite the name here, `finalizeAfter` holds when the withdrawal was STARTED:
+        /// finishing reverts `WithdrawDelayNotElapsed` until the channel's `withdrawDelay` has
+        /// passed since then (verified on Base mainnet).
         function pendingWithdrawals(bytes32) external view returns (uint128 amount, uint40 finalizeAfter);
     }
 

@@ -39,7 +39,7 @@ contract RustParityTest is Test {
         // deploy via the REAL canonical CREATE2 deployer, to the address Rust already signed for
         bytes memory initcode = abi.encodePacked(
             type(Countersign).creationCode,
-            abi.encode(OWNER, ESCROW, agent, oracle)
+            abi.encode(OWNER, ESCROW, agent, oracle, address(0))
         );
         (bool ok,) = CREATE2.call(abi.encodePacked(SALT, initcode));
         require(ok, "create2");

@@ -2,9 +2,10 @@
 # Prepare a production deployment of Tab on Base mainnet, for Railway.
 #
 # In scripts/.env (gitignored), set:
-#   TAB_TREASURY_KEY=0x...   a NEW wallet that has never been pasted anywhere. It deploys and owns
-#                            each person's wallet and funds their trial, so it needs, on Base:
-#                            ~0.003 ETH and TRIAL_AMOUNT x TRIAL_MAX_ACCOUNTS USDC (0.25 x 40 = 10).
+#   FUNDER_KEY=0x...         a wallet of yours with ~0.002 ETH on Base. Used here, once, to deploy
+#                            the deposit collector and give the service keys their gas; it never
+#                            goes to Railway. Tab holds no key that owns or funds anyone's wallet:
+#                            people create and fund their own from MetaMask.
 #   TAB_URL=https://...      your Tab service's Railway domain: the API and the MCP server
 #   SITE_URL=https://...     the website's Vercel domain (https://<project>.vercel.app)
 #   SHOP_URL=https://...     your demo shop's Railway domain
@@ -25,37 +26,30 @@ source "$(dirname "$0")/lib.sh"
 ASSUME_YES=false
 [ "${1:-}" = "--yes" ] && ASSUME_YES=true
 
-TREASURY_KEY=$(env_get scripts TAB_TREASURY_KEY)
-[ -n "$TREASURY_KEY" ] || die "put a NEW funded wallet's key in scripts/.env as TAB_TREASURY_KEY=0x..."
+FUNDER_KEY=$(env_get scripts FUNDER_KEY)
+[ -n "$FUNDER_KEY" ] || die "put a funded wallet's key in scripts/.env as FUNDER_KEY=0x... (it stays on this machine)"
 RPC=$(env_get scripts RPC); RPC=${RPC:-https://mainnet.base.org}
 TAB_URL=$(env_get scripts TAB_URL); TAB_URL=${TAB_URL:-https://REPLACE-with-your-tab-domain}
 SITE_URL=$(env_get scripts SITE_URL); SITE_URL=${SITE_URL:-https://REPLACE-with-your-vercel-domain}
 SHOP_URL=$(env_get scripts SHOP_URL); SHOP_URL=${SHOP_URL:-https://REPLACE-with-your-shop-domain}
-TRIAL_AMOUNT=${TRIAL_AMOUNT:-250000}
-TRIAL_MAX_ACCOUNTS=${TRIAL_MAX_ACCOUNTS:-40}
 
 ESCROW=0x4020074e9dF2ce1deE5A9C1b5c3f541D02a10003
-USDC=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-TREASURY=$(addr "$TREASURY_KEY")
+FUNDER=$(addr "$FUNDER_KEY")
 OUT="$ENV_ROOT/scripts"
 
 # the old, exposed wallet must never be reused
-[ "$TREASURY" != "0x3AaAe578f1F6bBE9705363DE4354d64d6a09C8B7" ] || die "that key was exposed; use a new wallet"
+[ "$FUNDER" != "0x3AaAe578f1F6bBE9705363DE4354d64d6a09C8B7" ] || die "that key was exposed; use a new wallet"
 
 # ---- preflight ----
 [ "$(cast chain-id --rpc-url "$RPC")" = 8453 ] || die "$RPC is not Base mainnet"
 [ "$(cast code $ESCROW --rpc-url "$RPC")" != 0x ] || die "the escrow has no code on $RPC"
-ETH=$(cast balance "$TREASURY" --rpc-url "$RPC")
-USDC_HAVE=$(cast call $USDC 'balanceOf(address)(uint256)' "$TREASURY" --rpc-url "$RPC" | cut -d' ' -f1)
-USDC_NEED=$((TRIAL_AMOUNT * TRIAL_MAX_ACCOUNTS))
-[ "$ETH" -ge 1500000000000000 ] || die "treasury $TREASURY has $(cast from-wei "$ETH") ETH; needs at least 0.0015 (0.003 recommended)"
-[ "$USDC_HAVE" -ge "$TRIAL_AMOUNT" ] || die "treasury $TREASURY has no USDC for trials"
-[ "$USDC_HAVE" -ge "$USDC_NEED" ] || log "note: treasury holds $USDC_HAVE atomic USDC, enough for $((USDC_HAVE / TRIAL_AMOUNT)) of $TRIAL_MAX_ACCOUNTS trials"
+ETH=$(cast balance "$FUNDER" --rpc-url "$RPC")
+[ "$ETH" -ge 1300000000000000 ] || die "funder $FUNDER has $(cast from-wei "$ETH") ETH on Base; needs at least 0.0013 (0.002 recommended)"
 
 cat >&2 <<PLAN
 
   Base mainnet via $RPC
-  treasury   $TREASURY   $(cast from-wei "$ETH") ETH, $USDC_HAVE atomic USDC
+  funder     $FUNDER   $(cast from-wei "$ETH") ETH (stays on this machine)
   website    $SITE_URL   (Vercel; proxies /api to Tab)
   Tab        $TAB_URL   (API and MCP)
   demo shop  $SHOP_URL
@@ -108,7 +102,6 @@ write .env.railway.tab <<EOF
 # Railway service "tab" (public: generate a domain with target port 3000).
 CONTROL_TOKEN=$CONTROL_TOKEN
 AGENT_PRIVATE_KEY=$AGENT_KEY
-TAB_TREASURY_KEY=$TREASURY_KEY
 COUNTERSIGN_COLLECTOR=PENDING
 COUNTERSIGNER_URL=http://countersigner.railway.internal:8787
 BASE_RPC=$RPC
@@ -118,15 +111,13 @@ TAB_BIND=[::]:3000
 TAB_PUBLIC_URL=$SITE_URL
 TAB_API_URL=$TAB_URL
 DEMO_SHOP_URL=$SHOP_URL
-TAB_TRIAL_AMOUNT=$TRIAL_AMOUNT
-TAB_TRIAL_MAX_ACCOUNTS=$TRIAL_MAX_ACCOUNTS
 TAB_DEPOSIT=50000
 TAB_MAX_PRICE=100000
 EOF
 
 write .env.railway.seller <<EOF
 # Railway service "seller" (public: generate a domain with target port 8080).
-SELLER_RECEIVER=$TREASURY
+SELLER_RECEIVER=$FUNDER
 SELLER_AUTHORIZER_KEY=$SHOP_KEY
 SELLER_ADMIN_TOKEN=$SHOP_ADMIN
 INTERCEPTA_API_KEY=$INTERCEPTA
@@ -143,8 +134,8 @@ log "wrote scripts/.env.railway.{countersigner,tab,seller} (gitignored, mode 600
 # ---- 2. the fixed collector ----
 cd "$(dirname "$0")/../contracts"
 forge build --silent
-NONCE=$(cast nonce "$TREASURY" --rpc-url "$RPC" --block pending)
-out=$(forge create --rpc-url "$RPC" --private-key "$TREASURY_KEY" --nonce "$NONCE" --broadcast --json \
+NONCE=$(cast nonce "$FUNDER" --rpc-url "$RPC" --block pending)
+out=$(forge create --rpc-url "$RPC" --private-key "$FUNDER_KEY" --nonce "$NONCE" --broadcast --json \
   src/Countersign.sol:CountersignCollector --constructor-args $ESCROW 2>&1) || true
 COLLECTOR=$(echo "$out" | sed -n '/^{/,$p' | jq -r '.deployedTo // empty' 2>/dev/null || true)
 [ -n "$COLLECTOR" ] || die "deploying the collector failed: $out"
@@ -155,7 +146,7 @@ log "collector  https://basescan.org/address/$COLLECTOR"
 
 # ---- 3. gas ----
 fund() {
-  cast send "$1" --value "$2" --nonce "$NONCE" --rpc-url "$RPC" --private-key "$TREASURY_KEY" --json >/dev/null \
+  cast send "$1" --value "$2" --nonce "$NONCE" --rpc-url "$RPC" --private-key "$FUNDER_KEY" --json >/dev/null \
     || die "sending gas to $1 failed"
   NONCE=$((NONCE + 1))
   log "gas        $2 to $1"

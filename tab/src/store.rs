@@ -30,18 +30,16 @@ pub fn secret(prefix: &str) -> String {
 pub struct Account {
     pub id: String,
     /// World ID fingerprint from the countersigner: stable for the person, private to Tab,
-    /// never their identity. One account per fingerprint is the "one free tab per human" rule.
+    /// never their identity. One account per fingerprint is the "one Tab per human" rule.
     pub human: String,
     pub wallet: Address,
     pub created_at: u64,
     /// The secret in this person's MCP link. Never shown to anyone else.
     #[serde(default)]
     pub mcp_token: String,
-    pub trial_amount: u128,
+    /// The transaction in which the person's own account created this wallet.
     #[serde(default)]
     pub deploy_tx: Option<String>,
-    #[serde(default)]
-    pub fund_tx: Option<String>,
 }
 
 /// One tab: a channel from a person's wallet to one seller, on that seller's terms.
@@ -250,9 +248,7 @@ mod tests {
             wallet: address!("1111111111111111111111111111111111111111"),
             created_at: 1,
             mcp_token: secret("tok"),
-            trial_amount: 250_000,
             deploy_tx: None,
-            fund_tx: None,
         }
     }
 

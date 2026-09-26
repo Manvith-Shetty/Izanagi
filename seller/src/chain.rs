@@ -7,6 +7,8 @@
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, Bytes, Signature, TxHash, B256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
+use alloy::rpc::client::ClientBuilder;
+use alloy::transports::layers::RetryBackoffLayer;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{anyhow, Context, Result};
 use common::escrow::{ICountersign, IX402BatchSettlement, IERC1271, EIP1271_MAGIC};
@@ -60,10 +62,12 @@ impl Chain {
         let signer: PrivateKeySigner = authorizer_key.trim().trim_start_matches("0x").parse()
             .context("SELLER_AUTHORIZER_KEY is not a private key")?;
         let authorizer = signer.address();
-        let provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::from(signer))
-            .connect_http(rpc.parse().context("BASE_RPC is not a URL")?)
-            .erased();
+        // public RPCs rate-limit (HTTP 429): retry with backoff so a busy endpoint does not
+        // lose a claim or a payer check. Up to 8 retries, starting at 800ms.
+        let client = ClientBuilder::default()
+            .layer(RetryBackoffLayer::new(8, 800, 100))
+            .http(rpc.parse().context("BASE_RPC is not a URL")?);
+        let provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer)).connect_client(client).erased();
         Ok(Self { provider, authorizer })
     }
 

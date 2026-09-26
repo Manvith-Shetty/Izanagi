@@ -58,8 +58,8 @@ contract CountersignCollector is IDepositCollector {
 ///      also sign), cannot redirect it (the digest binds the channel, which binds the receiver), and
 ///      cannot trap it (`initiateWithdraw`/`finalizeWithdraw` are owner-only and need no oracle).
 ///
-///      Ownership can be handed over once per owner, and only by the current owner: a free trial
-///      starts owned by the operator, and passes to the person when they add their own money.
+///      The person deploys their own wallet and owns it from the first block: no operator ever
+///      holds the owner role. Ownership moves only if the owner moves it.
 contract Countersign {
     /*//////////////////////////////////////////////////////////////
                                 CONSTANTS
@@ -81,7 +81,7 @@ contract Countersign {
     /// @notice Most time the agent may lock funds in a tab for. Real sellers ask for a day.
     uint40 public constant MAX_TAB_DELAY = 7 days;
 
-    address public owner; // the human (the operator during a free trial, until they take over)
+    address public owner; // the human, from the first block
     address public immutable escrow; // Coinbase x402BatchSettlement
     address public collector; // the deposit collector the agent opens tabs through
 
@@ -124,9 +124,12 @@ contract Countersign {
         _;
     }
 
-    constructor(address _owner, address _escrow, address _agent, address _oracle) {
+    /// @param _collector the deposit collector the agent may open tabs through. Set here so a
+    ///        person's wallet works from the transaction that creates it; the owner can change it.
+    constructor(address _owner, address _escrow, address _agent, address _oracle, address _collector) {
         owner = _owner;
         escrow = _escrow;
+        collector = _collector;
         agent = _agent;
         riskOracle = _oracle;
     }

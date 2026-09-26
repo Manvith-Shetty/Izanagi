@@ -12,7 +12,7 @@
 //! and ask a human to restart them; it cannot restart them itself.
 
 use crate::app::Shared;
-use crate::approvals::{handover_digest, restore_digest, ApprovalError, NewApproval, Purpose, Status};
+use crate::approvals::{restore_digest, NewApproval, Purpose, Status};
 use crate::journal::{Actor, Event};
 use crate::policy::{fmt_usdc, reason_code, Verdict};
 use crate::signer;
@@ -51,8 +51,6 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/enroll", post(enroll))
         .route("/v1/enroll/{id}/claim", post(enroll_claim))
         .route("/v1/bind", post(bind))
-        .route("/v1/handover", post(handover))
-        .route("/v1/handover/{id}/claim", post(handover_claim))
         .with_state(app)
 }
 
@@ -659,58 +657,6 @@ async fn bind(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<BindB
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HandoverBody {
-    wallet: Address,
-    new_owner: Address,
-}
-
-/// Ask the wallet's human to hand it to `newOwner`. Refused for a wallet no human is bound to:
-/// its first approver would otherwise become its human, and take it.
-async fn handover(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<HandoverBody>) -> Response {
-    if let Err(r) = operator(&app, &headers) {
-        return r;
-    }
-    if app.bindings.human_of(b.wallet).await.is_none() {
-        return (StatusCode::CONFLICT, Json(json!({"error": "no human is bound to this wallet"}))).into_response();
-    }
-    let n = NewApproval {
-        purpose: Purpose::Handover,
-        wallet: b.wallet,
-        seller: b.new_owner,
-        amount: 0,
-        reason: "Handing this wallet to your own account. Only that account will be able to take money out.".into(),
-        bound_digest: handover_digest(b.wallet, b.new_owner),
-    };
-    match app.request_approval(n).await {
-        Ok(a) => {
-            let mut v = serde_json::to_value(a.view()).unwrap_or_default();
-            v["approvalUrl"] = json!(app.approval_link(&a));
-            (StatusCode::ACCEPTED, Json(v)).into_response()
-        }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("{e:#}")}))).into_response(),
-    }
-}
-
-/// Redeem an approved handover, once, and only for the exact (wallet, new owner) approved.
-/// 200 approved · 202 not yet · 403 denied, expired, used, or approved for another account.
-async fn handover_claim(
-    State(app): State<Shared>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    Json(b): Json<HandoverBody>,
-) -> Response {
-    if let Err(r) = operator(&app, &headers) {
-        return r;
-    }
-    match app.approvals.consume(&id, &handover_digest(b.wallet, b.new_owner)).await {
-        Ok(_) => Json(json!({"status": "approved"})).into_response(),
-        Err(ApprovalError::NotYetApproved) => (StatusCode::ACCEPTED, Json(json!({"status": "pending"}))).into_response(),
-        Err(e) => (StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))).into_response(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,54 +812,6 @@ mod tests {
         assert_eq!(status, StatusCode::FORBIDDEN, "an unknown enrolment yields nothing");
         let (status, body) = call(a.clone(), post("/v1/bind", Some(TOKEN), json!({"grant": "grant_forged", "wallet": WALLET}))).await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    }
-
-    #[tokio::test]
-    async fn a_handover_needs_the_operator_and_a_wallet_with_a_human() {
-        let a = app(Some(TOKEN));
-        let body = json!({"wallet": WALLET, "newOwner": SELLER});
-        let (status, _) = call(a.clone(), post("/v1/handover", None, body.clone())).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-        let (status, resp) = call(a.clone(), post("/v1/handover", Some(TOKEN), body.clone())).await;
-        assert_eq!(status, StatusCode::CONFLICT, "an unbound wallet's first approver would take it: {resp}");
-
-        a.bindings.check_or_bind(WALLET.parse().unwrap(), "the-wallets-human").await.unwrap();
-        let (status, resp) = call(a.clone(), post("/v1/handover", Some(TOKEN), body)).await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "no World configured here, so no handover: {resp}");
-    }
-
-    #[tokio::test]
-    async fn a_handover_is_claimed_once_and_only_for_the_owner_approved() {
-        let a = app(Some(TOKEN));
-        let (wallet, owner): (Address, Address) = (WALLET.parse().unwrap(), SELLER.parse().unwrap());
-        let n = NewApproval {
-            purpose: Purpose::Handover,
-            wallet,
-            seller: owner,
-            amount: 0,
-            reason: String::new(),
-            bound_digest: handover_digest(wallet, owner),
-        };
-        let challenge = crate::approvals::Challenge {
-            device_code: "dc".into(),
-            user_code: "UC".into(),
-            verification_uri: "https://world.example".into(),
-            verification_uri_complete: None,
-            expires_in: 600,
-            interval: 5,
-        };
-        let apr = a.approvals.create(n, challenge).await;
-        let claim = |who: &str| post(&format!("/v1/handover/{}/claim", apr.id), Some(TOKEN), json!({"wallet": WALLET, "newOwner": who}));
-
-        let (status, _) = call(a.clone(), claim(SELLER)).await;
-        assert_eq!(status, StatusCode::ACCEPTED, "not approved yet");
-        a.approvals.mark_approved(&apr.id, "the-wallets-human".into(), true).await;
-        let (status, _) = call(a.clone(), claim("0x3333333333333333333333333333333333333333")).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "approved for one account, claimed for another");
-        let (status, _) = call(a.clone(), claim(SELLER)).await;
-        assert_eq!(status, StatusCode::OK);
-        let (status, _) = call(a.clone(), claim(SELLER)).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "single use");
     }
 
     #[test]

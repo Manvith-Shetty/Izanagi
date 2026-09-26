@@ -104,7 +104,7 @@ create() {
 log "deploying..."
 create src/Countersign.sol:CountersignCollector --constructor-args "$ESCROW"; COLLECTOR=$CREATED
 env_set scripts COUNTERSIGN_COLLECTOR "$COLLECTOR"
-create src/Countersign.sol:Countersign --constructor-args "$OWNER" "$ESCROW" "$AGENT" "$ORACLE"; WALLET=$CREATED
+create src/Countersign.sol:Countersign --constructor-args "$OWNER" "$ESCROW" "$AGENT" "$ORACLE" "$COLLECTOR"; WALLET=$CREATED
 env_set scripts COUNTERSIGN_WALLET "$WALLET"
 env_set agent COUNTERSIGN_WALLET "$WALLET"
 [ "$(cast call "$WALLET" 'riskOracle()(address)' --rpc-url "$RPC")" = "$ORACLE" ] || die "the wallet does not name the new oracle"

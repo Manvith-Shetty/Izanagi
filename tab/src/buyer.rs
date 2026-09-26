@@ -1,7 +1,7 @@
 //! Buying from x402 sellers on a person's behalf.
 //!
 //! One purchase: read the seller's 402, ask the countersigner (which screens the seller and
-//! may ask the person first), open a tab from the person's own trial funds if there is none
+//! may ask the person first), open a tab from the person's own wallet if there is none
 //! yet, pay with the countersigned cumulative voucher, and keep the receipt. Nothing here
 //! can authorise a payment: without the countersigner's signature the voucher is worthless.
 

@@ -2,6 +2,7 @@
 
 export type Stage =
   | { stage: "verifying"; user_code: string; world_url: string; expires_at: number }
+  | { stage: "create_wallet"; message: string; chain_id: number }
   | { stage: "creating"; step: string }
   | { stage: "ready"; account: string; returning: boolean }
   | { stage: "failed"; reason: string };
@@ -38,7 +39,7 @@ export interface ReceiptLine {
 
 export interface ApprovalView {
   id: string;
-  purpose: "payment" | "restore" | "enroll" | "handover";
+  purpose: "payment" | "restore" | "enroll";
   status: "pending" | "approved" | "denied" | "expired" | "used";
   wallet: string;
   seller: string;
@@ -55,10 +56,8 @@ export interface ApprovalView {
 }
 
 export interface Me {
-  account: { id: string; wallet: string; human: string; createdAt: number; trial: number; deployTx: string | null; fundTx: string | null };
+  account: { id: string; wallet: string; human: string; createdAt: number; deployTx: string | null };
   wallet: { usdc: number; paused: boolean; owner: string; riskOracle: string } | null;
-  /** `yours` is false while the wallet is still a free trial held by Tab. */
-  ownership: { owner: string; yours: boolean } | null;
   totals: { spent: number; stoppable: number; escrowed: number; saved: number };
   tabs: Tab[];
   approvals: ApprovalView[];
@@ -69,7 +68,8 @@ export interface Me {
 
 /** A transaction Tab built for the person's MetaMask to send. */
 export interface OwnerTx {
-  to: string;
+  /** Absent when the transaction creates a contract (the person's wallet). */
+  to?: string;
   data: string;
   label: string;
 }
@@ -150,9 +150,13 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   network: () => call<{ census: Census; accounts: number }>("/api/network"),
   catalog: () => call<{ listings: Listing[] }>("/api/catalog"),
-  health: () => call<{ trialsLeft: number; fork: boolean; chainId: number }>("/api/health"),
+  health: () => call<{ fork: boolean; chainId: number }>("/api/health"),
   signup: () => call<{ id: string; stage: Stage }>("/api/signup", { method: "POST" }),
   signupPoll: (id: string) => call<{ id: string; stage: Stage }>(`/api/signup/${id}`),
+  signupWallet: (id: string, owner: string, signature: string) =>
+    call<{ tx: OwnerTx; chainId: number }>(`/api/signup/${id}/wallet`, { method: "POST", body: JSON.stringify({ owner, signature }) }),
+  signupCreated: (id: string, tx: string) =>
+    call<{ id: string; stage: Stage }>(`/api/signup/${id}/created`, { method: "POST", body: JSON.stringify({ tx }) }),
   me: () => call<Me>("/api/me"),
   logout: () => call<{ ok: boolean }>("/api/logout", { method: "POST" }),
   buy: (url: string) => call<Outcome>("/api/buy", { method: "POST", body: JSON.stringify({ url }) }),
@@ -166,7 +170,7 @@ export const api = {
   depositTx: (amount: number) =>
     call<{ tx: OwnerTx; chainId: number }>("/api/wallet/deposit", { method: "POST", body: JSON.stringify({ amount }) }),
   deposited: (tx: string) =>
-    call<{ deposit: { from: string; amount: number; tx: string }; owner: string; approval: ApprovalView | null }>(
+    call<{ deposit: { from: string; amount: number; tx: string } }>(
       "/api/wallet/deposited",
       { method: "POST", body: JSON.stringify({ tx }) },
     ),

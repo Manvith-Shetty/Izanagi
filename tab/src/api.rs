@@ -1,7 +1,8 @@
 //! Tab's HTTP surface: the website's API, the MCP server, and the website itself.
 //!
 //!   public       GET  /api/health, /api/network, /api/catalog, /api/approvals/{id}
-//!                POST /api/signup, GET /api/signup/{id}      (World ID → your own wallet)
+//!                POST /api/signup, GET /api/signup/{id}      (World ID)
+//!                POST /api/signup/{id}/wallet, /created       (your MetaMask creates your wallet)
 //!   signed in    GET  /api/me, /api/stream                   (your Tab, live)
 //!   (cookie)     POST /api/buy, /api/approvals/{id}/wait, /api/tabs/close, /api/tabs/reopen,
 //!                     /api/logout
@@ -45,6 +46,8 @@ pub fn router(app: Shared) -> Router {
         .route("/api/catalog", get(catalog))
         .route("/api/signup", post(signup))
         .route("/api/signup/{id}", get(signup_poll))
+        .route("/api/signup/{id}/wallet", post(signup_wallet))
+        .route("/api/signup/{id}/created", post(signup_created))
         .route("/api/logout", post(logout))
         .route("/api/me", get(me))
         .route("/api/stream", get(stream))
@@ -145,7 +148,6 @@ fn bad(status: StatusCode, e: impl std::fmt::Display) -> Response {
 async fn health(State(app): State<Shared>) -> Response {
     let brain = app.brain.health().await.ok();
     let agent_gas = app.chain.gas_balance(app.chain.agent_address).await.ok();
-    let treasury_gas = app.chain.gas_balance(app.chain.treasury_address).await.ok();
     Json(json!({
         "status": "ok",
         "countersigner": brain,
@@ -153,10 +155,8 @@ async fn health(State(app): State<Shared>) -> Response {
         "fork": app.env.is_fork(),
         "agent": app.chain.agent_address,
         "agentGasWei": agent_gas.map(|g| g.to_string()),
-        "treasury": app.chain.treasury_address,
-        "treasuryGasWei": treasury_gas.map(|g| g.to_string()),
+        "collector": app.chain.collector,
         "accounts": app.store.account_count().await,
-        "trialsLeft": app.env.trial_max_accounts.saturating_sub(app.store.account_count().await),
     }))
     .into_response()
 }
@@ -205,20 +205,51 @@ async fn signup(State(app): State<Shared>) -> Response {
 }
 
 async fn signup_poll(State(app): State<Shared>, Path(id): Path<String>) -> Response {
-    let stage = match app.onboarding.poll(&id).await {
-        Ok(s) => s,
-        Err(e) => return bad(StatusCode::NOT_FOUND, e),
-    };
+    match app.onboarding.poll(&id).await {
+        Ok(s) => with_session(&app, &id, s).await,
+        Err(e) => bad(StatusCode::NOT_FOUND, e),
+    }
+}
+
+/// A signup's stage; once it is ready, the session that signs the person in comes with it.
+async fn with_session(app: &Shared, id: &str, stage: crate::onboard::Stage) -> Response {
     let mut res = Json(json!({ "id": id, "stage": stage })).into_response();
     if let crate::onboard::Stage::Ready { account, .. } = &stage {
         match app.store.new_session(account).await {
             Ok(t) => {
-                res.headers_mut().insert(header::SET_COOKIE, cookie(&app, &t, 7 * 24 * 3600));
+                res.headers_mut().insert(header::SET_COOKIE, cookie(app, &t, 7 * 24 * 3600));
             }
             Err(e) => return bad(StatusCode::INTERNAL_SERVER_ERROR, e),
         }
     }
     res
+}
+
+#[derive(Deserialize)]
+struct WalletBody {
+    owner: Address,
+    /// The owner's signature over `onboard::claim_message` for this signup.
+    signature: String,
+}
+
+/// What the person's account signs, then the transaction that creates their wallet.
+async fn signup_wallet(State(app): State<Shared>, Path(id): Path<String>, Json(b): Json<WalletBody>) -> Response {
+    match app.onboarding.wallet_tx(&id, b.owner, &b.signature).await {
+        Ok(tx) => Json(json!({ "tx": tx, "chainId": app.env.chain_id })).into_response(),
+        Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreatedBody {
+    tx: alloy::primitives::TxHash,
+}
+
+async fn signup_created(State(app): State<Shared>, Path(id): Path<String>, Json(b): Json<CreatedBody>) -> Response {
+    match app.onboarding.created(&id, b.tx).await {
+        Ok(s) => with_session(&app, &id, s).await,
+        Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
 }
 
 async fn logout(State(app): State<Shared>, headers: HeaderMap) -> Response {

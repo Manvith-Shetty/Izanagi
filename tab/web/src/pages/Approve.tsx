@@ -17,11 +17,6 @@ function ask(a: ApprovalView, service: string | null): { title: string; body: st
         title: `Reopen your tab with ${who}?`,
         body: "You closed this tab. If you approve, your AI can pay this seller again. If you don't, nothing changes.",
       };
-    case "handover":
-      return {
-        title: `Make this wallet yours?`,
-        body: `Money just arrived from ${short(a.seller)}. If you approve, that account becomes the wallet's owner and the only one that can take money out; Tab gives up its keys. If you didn't just add money, deny it.`,
-      };
     default:
       return { title: "Verify you're a person", body: "This gets you your own Tab. It checks you're a real, unique person; Tab never learns who you are." };
   }
@@ -82,8 +77,8 @@ export default function Approve() {
               {a.purpose !== "enroll" && (
                 <>
                   <div className="line">
-                    <span className="what">{a.purpose === "handover" ? "New owner" : "Seller"}</span>
-                    <span className="amt">{a.purpose === "handover" ? short(a.seller) : service ?? short(a.seller)}</span>
+                    <span className="what">Seller</span>
+                    <span className="amt">{service ?? short(a.seller)}</span>
                   </div>
                   {a.purpose === "payment" && (
                     <div className="line">
@@ -130,9 +125,7 @@ export default function Approve() {
                     {yes
                       ? a.purpose === "restore"
                         ? "Reopened. Your AI can pay this seller again."
-                        : a.purpose === "handover"
-                          ? `Approved. Tab is handing the wallet to ${short(a.seller)} now.`
-                          : "Approved. Your AI can carry on."
+                        : "Approved. Your AI can carry on."
                       : `Nothing happened${a.deniedReason ? ` (${a.deniedReason.replaceAll("_", " ")})` : ""}. No money moved.`}
                     {a.tx && scan("tx", a.tx, false) && (
                       <>

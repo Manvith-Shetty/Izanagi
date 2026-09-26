@@ -40,12 +40,18 @@ export async function connect(chainId: number): Promise<string> {
   return accounts[0].toLowerCase();
 }
 
-/** Sign and send one transaction Tab built. Returns its hash as soon as MetaMask has sent it. */
-export async function send(from: string, tx: { to: string; data: string }): Promise<string> {
-  return (await eth().request({
-    method: "eth_sendTransaction",
-    params: [{ from, to: tx.to, data: tx.data, value: "0x0" }],
-  })) as string;
+/** Sign and send one transaction Tab built. Returns its hash as soon as MetaMask has sent it.
+ *  A transaction with no `to` creates a contract: the person's own wallet. */
+export async function send(from: string, tx: { to?: string; data: string }): Promise<string> {
+  const req: Record<string, string> = { from, data: tx.data, value: "0x0" };
+  if (tx.to) req.to = tx.to;
+  return (await eth().request({ method: "eth_sendTransaction", params: [req] })) as string;
+}
+
+/** Sign a plain-text message (EIP-191), exactly as Tab gave it. Costs nothing. */
+export async function sign(from: string, message: string): Promise<string> {
+  const hex = `0x${Array.from(new TextEncoder().encode(message), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+  return (await eth().request({ method: "personal_sign", params: [hex, from] })) as string;
 }
 
 /** MetaMask's errors, in words a person can act on. */

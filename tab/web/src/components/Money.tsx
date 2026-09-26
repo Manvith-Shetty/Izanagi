@@ -10,23 +10,19 @@ function atomic(dollars: string): number | undefined {
 }
 
 /**
- * Adding money, and taking it out. A free trial is Tab's wallet; the first deposit from the
- * person's MetaMask makes it theirs, and from then on only that account can take money out.
+ * Adding money, and taking it out. The wallet belongs to the person's MetaMask account from the
+ * block that created it: any account may add money, only that one can take money out.
  */
 export function Money({ me, onChange }: { me: Me; onChange: () => void }) {
   const [amount, setAmount] = useState("5");
   const [step, setStep] = useState<string>();
   const [done, setDone] = useState<string>();
-  /** A handover waiting on the person's World ID, and the deposit that asked for it. */
-  const [pending, setPending] = useState<{ approval: string; tx: string }>();
   const [error, setError] = useState<string>();
-  const yours = me.ownership?.yours ?? false;
-  const owner = me.ownership?.owner;
+  const owner = me.wallet?.owner;
 
   const run = async (work: () => Promise<string>) => {
     setError(undefined);
     setDone(undefined);
-    setPending(undefined);
     try {
       setDone(await work());
       onChange();
@@ -44,24 +40,12 @@ export function Money({ me, onChange }: { me: Me; onChange: () => void }) {
       setStep("Connecting MetaMask…");
       const { tx, chainId } = await api.depositTx(value);
       const from = await connect(chainId);
-      if (yours && owner && from !== owner.toLowerCase()) {
-        throw new Error(`This wallet belongs to ${short(owner)}. Switch MetaMask to that account to add money.`);
-      }
       setStep(`Confirm sending ${usd(value)} in MetaMask…`);
       const hash = await send(from, tx);
-      return confirm(hash);
+      setStep("Waiting for it to land on Base…");
+      const r = await api.deposited(hash);
+      return `Added ${usd(r.deposit.amount)}.`;
     });
-
-  /** Tab checks the deposit; a trial wallet then waits on the person's World ID to become theirs. */
-  const confirm = async (hash: string) => {
-    setStep("Waiting for it to land on Base…");
-    const r = await api.deposited(hash);
-    if (r.approval) {
-      setPending({ approval: r.approval.id, tx: hash });
-      return `Added ${usd(r.deposit.amount)}. One last step: approve with World ID so that ${short(r.deposit.from)} becomes the wallet's owner.`;
-    }
-    return `Added ${usd(r.deposit.amount)}.`;
-  };
 
   const takeOut = () =>
     run(async () => {
@@ -88,51 +72,32 @@ export function Money({ me, onChange }: { me: Me; onChange: () => void }) {
 
   return (
     <div className="panel">
-      <h3>{yours ? "Your money" : "Make it yours"}</h3>
-      {yours ? (
-        <p className="muted" style={{ fontSize: "var(--t-sm)", marginBottom: "0.8rem" }}>
-          Owned by <span className="mono">{short(owner!)}</span>, your MetaMask. Only that account can take money out. Your AI
-          can spend within your limits, but never withdraw.
-        </p>
-      ) : (
-        <p className="muted" style={{ fontSize: "var(--t-sm)", marginBottom: "0.8rem" }}>
-          Tab holds the keys to this free trial wallet. Add money from MetaMask and the wallet becomes yours: after that only
-          your MetaMask can take money out, not Tab and not your AI.
-        </p>
-      )}
+      <h3>Your money</h3>
+      <p className="muted" style={{ fontSize: "var(--t-sm)", marginBottom: "0.8rem" }}>
+        {owner ? (
+          <>
+            Owned by <span className="mono">{short(owner)}</span>, your MetaMask.{" "}
+          </>
+        ) : null}
+        Only that account can take money out. Your AI can spend within your limits, but never withdraw.
+      </p>
       <div className="amount-row">
         <label className="amount">
           <span>$</span>
           <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} aria-label="Amount in US dollars" disabled={!!step} />
         </label>
         <button className="btn small" onClick={add} disabled={!!step}>
-          {yours ? "Add money" : "Connect MetaMask & add"}
+          Add money
         </button>
-        {yours && (
-          <button className="btn small ghost" onClick={takeOut} disabled={!!step}>
-            Take money out
-          </button>
-        )}
+        <button className="btn small ghost" onClick={takeOut} disabled={!!step}>
+          Take money out
+        </button>
       </div>
       <p className="muted" style={{ fontSize: "var(--t-xs)", marginTop: "0.6rem" }}>
         USDC on Base. MetaMask needs a little ETH on Base for the fee, usually under a cent.
       </p>
       {step && <div className="notice" style={{ marginTop: "0.8rem" }}>{step}</div>}
-      {done && (
-        <div className="notice" style={{ marginTop: "0.8rem" }}>
-          {done}
-          {pending && !yours && (
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.6rem" }}>
-              <a className="btn small" href={`/approve/${pending.approval}`} target="_blank" rel="noreferrer">
-                Approve with World ID
-              </a>
-              <button className="btn small ghost" onClick={() => run(() => confirm(pending.tx))}>
-                Ask again
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      {done && <div className="notice" style={{ marginTop: "0.8rem" }}>{done}</div>}
       {error && <div className="error" style={{ marginTop: "0.8rem" }}>{error}</div>}
     </div>
   );

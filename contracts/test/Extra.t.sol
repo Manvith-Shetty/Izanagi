@@ -28,7 +28,7 @@ contract ExtraTest is Test {
         bytes32 salt = keccak256("countersign.v1");
         bytes memory initcode = abi.encodePacked(
             type(Countersign).creationCode,
-            abi.encode(owner, ESCROW, vm.addr(agentPk), vm.addr(oraclePk))
+            abi.encode(owner, ESCROW, vm.addr(agentPk), vm.addr(oraclePk), address(0))
         );
         address predicted = address(uint160(uint256(keccak256(
             abi.encodePacked(bytes1(0xff), CREATE2, salt, keccak256(initcode))))));
@@ -46,7 +46,7 @@ contract ExtraTest is Test {
         agent = vm.addr(agentPk); oracle = vm.addr(oraclePk); rAuth = vm.addr(rAuthPk);
         vm.etch(agent,""); vm.etch(oracle,""); vm.etch(rAuth,"");
         CountersignCollector col = new CountersignCollector(ESCROW);
-        Countersign cs = new Countersign(owner, ESCROW, agent, oracle);
+        Countersign cs = new Countersign(owner, ESCROW, agent, oracle, address(0));
         deal(USDC, address(cs), 50_000_000);
 
         ChannelConfig memory cfg = ChannelConfig({
@@ -83,7 +83,7 @@ contract ExtraTest is Test {
         vm.etch(agent,""); vm.etch(oracle,""); vm.etch(rAuth,"");
         address seller = address(0x5E11E5); vm.etch(seller,"");
         CountersignCollector col = new CountersignCollector(ESCROW);
-        Countersign cs = new Countersign(owner, ESCROW, agent, oracle);
+        Countersign cs = new Countersign(owner, ESCROW, agent, oracle, address(0));
         deal(USDC, address(cs), 50_000_000);
         ChannelConfig memory cfg = ChannelConfig({
             payer: address(cs), payerAuthorizer: address(0), receiver: seller,
@@ -124,7 +124,7 @@ contract ExtraTest is Test {
         vm.etch(agent,""); vm.etch(oracle,""); vm.etch(rAuth,"");
         address seller = address(0x5E11E5); vm.etch(seller,"");
         CountersignCollector col = new CountersignCollector(ESCROW);
-        Countersign cs = new Countersign(owner, ESCROW, agent, oracle);
+        Countersign cs = new Countersign(owner, ESCROW, agent, oracle, address(0));
         deal(USDC, address(cs), 50_000_000);
         ChannelConfig memory cfg = ChannelConfig({
             payer: address(cs), payerAuthorizer: address(0), receiver: seller,
@@ -160,7 +160,7 @@ contract CollectorAccessTest is Test {
         address owner = address(0x0117E5);
         address attacker = address(0xBADBAD);
         CountersignCollector collector = new CountersignCollector(ESCROW);
-        Countersign cs = new Countersign(owner, ESCROW, address(0xA11CE), address(0x0DACE));
+        Countersign cs = new Countersign(owner, ESCROW, address(0xA11CE), address(0x0DACE), address(0));
         deal(USDC, address(cs), 10_000_000);
         vm.prank(owner);
         cs.approveToken(USDC, address(collector), 10_000_000);

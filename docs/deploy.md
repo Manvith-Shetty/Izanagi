@@ -37,19 +37,21 @@ and its live feed sends a keep-alive every 15 seconds, well inside Vercel's prox
 **Push the code to GitHub.** Railway and Vercel both deploy from the repository. Nothing secret
 is in it: every `.env` file is gitignored, and `.dockerignore` keeps them out of the image too.
 
-**Use a new wallet for the treasury.** It deploys and owns each person's wallet until they make it
-their own, and pays their $0.25 trial. On Base it needs:
-- about **0.003 ETH**: deploying the collector, gas for the service keys, ~0.00002 ETH per person
-- **0.25 USDC per person**: 10 USDC covers the default 40 free tabs
+**Have a funder wallet with about 0.002 ETH on Base.** The setup script uses it once, on your
+machine, to deploy the deposit collector and give the service keys their gas. Its key never goes
+to Railway: Tab holds no key that owns or funds anyone's wallet. Each person creates their wallet
+from their own MetaMask, owns it from the first block, and adds their own USDC.
 
 Never reuse a key that has been pasted into a chat or a terminal log.
 
-**Use a dedicated RPC if you can.** `https://mainnet.base.org` rate-limits; a free Alchemy or
-QuickNode Base endpoint is far steadier under a crowd of judges.
+**Use a dedicated RPC.** `https://mainnet.base.org` rate-limits hard: it throttled a single
+test run of ours to HTTP 429 more than once. Every service retries with backoff, but a crowd of
+judges will still feel it. A free Alchemy or QuickNode Base endpoint is far steadier; put it in
+`RPC` (step 3) and every service uses it.
 
 **Deployed before?** Wallets made by an earlier version use the old contract: they cannot open
 tabs the new way, and their collector allowance is exposed. Start from fresh `/data` volumes,
-and have the treasury set each old wallet's allowance to zero.
+and have whoever owns each old wallet set its collector allowance to zero.
 
 ## 2. Railway: create the services and their domains
 
@@ -78,7 +80,7 @@ link can be written once.
 In `scripts/.env`:
 
 ```bash
-TAB_TREASURY_KEY=0x...                           # the NEW wallet
+FUNDER_KEY=0x...                                 # ~0.002 ETH on Base; stays on this machine
 RPC=https://mainnet.base.org                     # or your dedicated endpoint
 TAB_URL=https://<tab service>.up.railway.app     # from step 2
 SHOP_URL=https://<seller service>.up.railway.app # from step 2
@@ -126,7 +128,7 @@ The URLs they must end up with, if you left any out in step 3:
 Railway redeploys each service when its variables change. Check the backend on its own:
 
 ```bash
-curl https://<tab service>.up.railway.app/api/health      # status ok, countersigner ok, trialsLeft 40
+curl https://<tab service>.up.railway.app/api/health      # status ok, countersigner ok, collector set
 curl https://<seller service>.up.railway.app/health        # payerScreening true, rogueAfter 3
 ```
 
@@ -153,25 +155,31 @@ curl https://<project name>.vercel.app/api/health     # the same answer as step 
 
 Then open `https://<project name>.vercel.app`:
 
-1. **Get your free Tab** → verify with World ID → you land on your dashboard with $0.25.
-2. **Try it → Tab demo shop** four times: three real Bitcoin prices, then junk.
-3. **Close tab** → the STOPPED stamp; the shop can no longer collect.
-4. **Connect your AI**: copy the Claude Code command (it points at Railway), then ask Claude
+You need MetaMask with a little ETH and a few USDC on Base.
+
+1. **Get your Tab** → verify with World ID → **Connect MetaMask & create your wallet**: one free
+   signature, then one transaction. The dashboard shows your MetaMask account as the owner.
+2. **Your money → Add money**: $2 from MetaMask.
+3. **Try it → Tab demo shop** four times: three real Bitcoin prices, then junk.
+4. **Close tab** → the STOPPED stamp; the shop can no longer collect.
+5. **Connect your AI**: copy the Claude Code command (it points at Railway), then ask Claude
    *"Use Tab to get the latest Bitcoin price from hyperextend."*
-5. **Make it yours** (optional; needs USDC and a little ETH on Base in MetaMask): add $1 →
-   approve with World ID → the wallet card says the keys are yours → **Take money out**.
+6. **Take money out** → back to your MetaMask (a tab's leftover comes back after the seller's
+   withdraw delay).
 
 ## Good to know
 
-- **Logs**: each Railway service's *Deployments → View logs*. Tab logs every signup, deployment
-  and handover; the countersigner logs every decision. Vercel only serves files and the proxy.
-- **Costs to watch**: the treasury (each new person costs ~$0.25 + a little gas) and the agent's
-  gas (each new tab is one transaction). `/api/health` reports both gas balances.
+- **Logs**: each Railway service's *Deployments → View logs*. Tab logs every signup and every
+  wallet a person creates; the countersigner logs every decision. Vercel only serves files and
+  the proxy.
+- **Costs to watch**: only the service keys' gas. The agent pays for each new tab (one
+  transaction), the oracle for each revocation. People pay for their own wallet and money.
+  `/api/health` reports the agent's gas.
 - **Intercepta quota**: the event key allows 1,000 checks. Each purchase uses 1–2 and each open
   tab 1 per 5 minutes (`RESCREEN_SECS=300`). Ask Intercepta for more before a big demo.
 - **World ID**: the event runs on World's sandbox, where proofs are mocked. Anyone can verify
   from a browser; no World App is needed.
 - **Changing limits**: `AUTONOMOUS_LIMIT` (countersigner) is what an AI may spend per tab before
-  asking; `TAB_TRIAL_MAX_ACCOUNTS` (tab) caps free tabs.
+  asking; `TAB_MAX_PRICE` (tab) is the most it pays for a single call.
 - **Changing the backend's domain** means editing `tab/web/vercel.json` and redeploying the
   website; Vercel's rewrites cannot read environment variables.

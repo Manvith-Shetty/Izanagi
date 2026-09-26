@@ -5,9 +5,9 @@ import {Test} from "forge-std/Test.sol";
 import {Countersign, CountersignCollector} from "../src/Countersign.sol";
 import {IX402BatchSettlement, IERC20, ChannelConfig, Voucher, VoucherClaim} from "../src/IX402.sol";
 
-/// The Tab lifecycle against the real escrow: the agent opens tabs from the wallet's own funds
-/// with no allowance left standing, a stranger cannot route those funds into a channel they
-/// authorise, and a trial wallet can be handed to the person who funds it.
+/// The Tab lifecycle against the real escrow: a wallet works from the transaction that creates
+/// it, the agent opens tabs from its own funds with no allowance left standing, a stranger
+/// cannot route those funds into a channel they authorise, and only the owner moves ownership.
 contract TabFlowTest is Test {
     address constant ESCROW = 0x4020074e9dF2ce1deE5A9C1b5c3f541D02a10003;
     address constant USDC   = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
@@ -16,8 +16,8 @@ contract TabFlowTest is Test {
     Countersign cs;
     CountersignCollector col;
 
-    address operator = address(0x0117E5); // Tab's treasury, the trial owner
-    address person   = makeAddr("their MetaMask");
+    address operator = address(0x0117E5); // the person's MetaMask: they deploy and own the wallet
+    address person   = makeAddr("another account of theirs");
     address agent    = address(0xA11CE);
     address oracle   = address(0x0DACE);
     address seller   = address(0x5E11E5);
@@ -29,10 +29,13 @@ contract TabFlowTest is Test {
         evil = vm.addr(evilPk);
         vm.etch(evil, ""); vm.etch(seller, ""); vm.etch(person, "");
         col = new CountersignCollector(ESCROW);
-        cs = new Countersign(operator, ESCROW, agent, oracle);
+        cs = new Countersign(operator, ESCROW, agent, oracle, address(col));
         deal(USDC, address(cs), 10_000_000);
-        vm.prank(operator);
-        cs.setCollector(address(col));
+    }
+
+    function test_AWalletHasItsCollectorFromTheStart() public view {
+        assertEq(cs.collector(), address(col));
+        assertEq(cs.owner(), operator);
     }
 
     function _cfg(address authorizer, uint40 delay, uint256 salt) internal view returns (ChannelConfig memory) {

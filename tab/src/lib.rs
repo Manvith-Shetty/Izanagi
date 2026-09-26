@@ -1,5 +1,5 @@
-//! Tab: the product. A person proves they are a unique human, gets their own Countersign wallet
-//! with a free trial, and lets their AI assistant buy from paid APIs through it -- with every
+//! Tab: the product. A person proves they are a unique human, creates their own Countersign
+//! wallet from MetaMask, and lets their AI assistant buy from paid APIs through it -- with every
 //! payment screened, bigger ones approved by them, and any of them stoppable until cashed in.
 pub mod api;
 pub mod app;
