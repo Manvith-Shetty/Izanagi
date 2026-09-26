@@ -28,7 +28,7 @@ Everything runs on **Base mainnet** with real USDC, against Coinbase's deployed 
 
 | | |
 |---|---|
-| Website | **[izanagi-tab.vercel.app](https://izanagi-tab.vercel.app)** |
+| Website | **[izanagi-black.vercel.app](https://izanagi-black.vercel.app)** |
 | Demo shop (goes rogue after 3 calls) | [`seller-production-18f0.up.railway.app/v1/data`](https://seller-production-18f0.up.railway.app/v1/data) |
 | Backend health | [`tab-production-5655.up.railway.app/api/health`](https://tab-production-5655.up.railway.app/api/health) |
 
