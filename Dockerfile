@@ -5,7 +5,7 @@
 #   /app/seller         the demo shop that goes bad on purpose       (public)
 #
 # Configuration comes from Railway variables, never from files: .env files are excluded from
-# the build context (.dockerignore) and nothing here reads one. See docs/deploy-railway.md.
+# the build context (.dockerignore) and nothing here reads one. See docs/deploy.md.
 
 # ---- the website --------------------------------------------------------------------------
 FROM node:22-slim AS web

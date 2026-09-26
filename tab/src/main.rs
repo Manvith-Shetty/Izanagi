@@ -25,6 +25,7 @@ async fn main() -> Result<()> {
 
     tracing::info!(
         public = %app.env.public_url,
+        api = %app.env.api_url,
         agent = %app.chain.agent_address,
         treasury = %app.chain.treasury_address,
         "Tab listening on http://{bind}"

@@ -5,8 +5,10 @@
 #   TAB_TREASURY_KEY=0x...   a NEW wallet that has never been pasted anywhere. It deploys and owns
 #                            each person's wallet and funds their trial, so it needs, on Base:
 #                            ~0.003 ETH and TRIAL_AMOUNT x TRIAL_MAX_ACCOUNTS USDC (0.25 x 40 = 10).
-#   TAB_URL=https://...      your Tab service's Railway domain (or leave for later)
-#   SHOP_URL=https://...     your demo shop's Railway domain (or leave for later)
+#   TAB_URL=https://...      your Tab service's Railway domain: the API and the MCP server
+#   SITE_URL=https://...     the website's Vercel domain (https://<project>.vercel.app)
+#   SHOP_URL=https://...     your demo shop's Railway domain
+#   (any of the three may be left for later and set in Railway's variables afterwards)
 #
 #   scripts/railway-setup.sh        (shows the plan, asks before sending anything)
 #
@@ -27,6 +29,7 @@ TREASURY_KEY=$(env_get scripts TAB_TREASURY_KEY)
 [ -n "$TREASURY_KEY" ] || die "put a NEW funded wallet's key in scripts/.env as TAB_TREASURY_KEY=0x..."
 RPC=$(env_get scripts RPC); RPC=${RPC:-https://mainnet.base.org}
 TAB_URL=$(env_get scripts TAB_URL); TAB_URL=${TAB_URL:-https://REPLACE-with-your-tab-domain}
+SITE_URL=$(env_get scripts SITE_URL); SITE_URL=${SITE_URL:-https://REPLACE-with-your-vercel-domain}
 SHOP_URL=$(env_get scripts SHOP_URL); SHOP_URL=${SHOP_URL:-https://REPLACE-with-your-shop-domain}
 TRIAL_AMOUNT=${TRIAL_AMOUNT:-250000}
 TRIAL_MAX_ACCOUNTS=${TRIAL_MAX_ACCOUNTS:-40}
@@ -53,7 +56,8 @@ cat >&2 <<PLAN
 
   Base mainnet via $RPC
   treasury   $TREASURY   $(cast from-wei "$ETH") ETH, $USDC_HAVE atomic USDC
-  Tab        $TAB_URL
+  website    $SITE_URL   (Vercel; proxies /api to Tab)
+  Tab        $TAB_URL   (API and MCP)
   demo shop  $SHOP_URL
 
   1. generate the agent, oracle and shop keys, and write all three service files
@@ -91,7 +95,7 @@ WORLD_REQUIRE_ORB=true
 BASE_RPC=$RPC
 BIND=[::]:8787
 STATE_DIR=/data
-APPROVAL_PAGE_URL=$TAB_URL
+APPROVAL_PAGE_URL=$SITE_URL
 ATTESTATION_TTL=2592000
 AUTONOMOUS_LIMIT=50000
 APPROVAL_STEP=50000
@@ -111,7 +115,8 @@ BASE_RPC=$RPC
 CENSUS_RPC=$RPC
 CHAIN_ID=8453
 TAB_BIND=[::]:3000
-TAB_PUBLIC_URL=$TAB_URL
+TAB_PUBLIC_URL=$SITE_URL
+TAB_API_URL=$TAB_URL
 DEMO_SHOP_URL=$SHOP_URL
 TAB_TRIAL_AMOUNT=$TRIAL_AMOUNT
 TAB_TRIAL_MAX_ACCOUNTS=$TRIAL_MAX_ACCOUNTS

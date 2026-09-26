@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://REPLACE-WITH-TAB-BACKEND.up.railway.app/api/:path*" },
+    { "source": "/mcp/:path*", "destination": "https://REPLACE-WITH-TAB-BACKEND.up.railway.app/mcp/:path*" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

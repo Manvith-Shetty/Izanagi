@@ -89,11 +89,13 @@ async fn mcp_gate(
 fn mcp_service(app: Shared) -> StreamableHttpService<TabMcp, LocalSessionManager> {
     // DNS-rebinding protection: only answer for the host Tab is published at (and loopback)
     let mut hosts = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    if let Ok(u) = url::Url::parse(&app.env.public_url) {
-        if let Some(h) = u.host_str() {
-            hosts.push(h.to_string());
-            if let Some(p) = u.port() {
-                hosts.push(format!("{h}:{p}"));
+    for public in [&app.env.public_url, &app.env.api_url] {
+        if let Ok(u) = url::Url::parse(public) {
+            if let Some(h) = u.host_str() {
+                hosts.push(h.to_string());
+                if let Some(p) = u.port() {
+                    hosts.push(format!("{h}:{p}"));
+                }
             }
         }
     }

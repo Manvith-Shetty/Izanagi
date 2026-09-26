@@ -12,8 +12,12 @@ use std::path::PathBuf;
 #[derive(Clone)]
 pub struct TabEnv {
     pub bind: String,
-    /// The URL people reach Tab at. Approval links and the MCP address are built from it.
+    /// The URL people reach Tab's website at: the session cookie and every page link belong to
+    /// it. When the website is hosted elsewhere (Vercel) it proxies `/api` here.
     pub public_url: String,
+    /// Where this server itself is reachable. MCP links point here directly, not through the
+    /// website's proxy: an AI client holds its connection open for as long as it likes.
+    pub api_url: String,
     pub countersigner_url: String,
     /// The countersigner's operator token: stop payments, ask a human to restart them.
     pub control_token: String,
@@ -50,6 +54,7 @@ impl std::fmt::Debug for TabEnv {
         f.debug_struct("TabEnv")
             .field("bind", &self.bind)
             .field("public_url", &self.public_url)
+            .field("api_url", &self.api_url)
             .field("countersigner_url", &self.countersigner_url)
             .field("control_token", &"<redacted>")
             .field("agent_private_key", &"<redacted>")
@@ -82,6 +87,10 @@ impl TabEnv {
         if !(public_url.starts_with("https://") || public_url.starts_with("http://")) {
             return Err(format!("TAB_PUBLIC_URL must start with https:// or http:// (got {public_url:?})"));
         }
+        let api_url = non_empty("TAB_API_URL").unwrap_or_else(|| public_url.clone()).trim_end_matches('/').to_string();
+        if !(api_url.starts_with("https://") || api_url.starts_with("http://")) {
+            return Err(format!("TAB_API_URL must start with https:// or http:// (got {api_url:?})"));
+        }
         let secret = |k: &str| -> Result<Option<String>, String> {
             match non_empty(k) {
                 Some(t) if t.len() < 16 => Err(format!("{k} must be at least 16 characters")),
@@ -95,6 +104,7 @@ impl TabEnv {
         let rpc = non_empty("BASE_RPC").unwrap_or_else(|| "https://mainnet.base.org".into());
         Ok(Self {
             public_url,
+            api_url,
             bind,
             countersigner_url: non_empty("COUNTERSIGNER_URL")
                 .unwrap_or_else(|| "http://127.0.0.1:8787".into())
@@ -129,7 +139,7 @@ impl TabEnv {
 
     /// The address a person's MCP client should be given. The token is theirs alone.
     pub fn mcp_url(&self, token: &str) -> String {
-        format!("{}/mcp/{token}", self.public_url)
+        format!("{}/mcp/{token}", self.api_url)
     }
 }
 
@@ -145,7 +155,7 @@ mod tests {
         std::env::set_var("AGENT_PRIVATE_KEY", "0x2");
         std::env::set_var("TAB_TREASURY_KEY", "0x3");
         std::env::set_var("COUNTERSIGN_COLLECTOR", "0x1111111111111111111111111111111111111111");
-        for k in ["TAB_PUBLIC_URL", "TAB_BIND"] {
+        for k in ["TAB_PUBLIC_URL", "TAB_API_URL", "TAB_BIND"] {
             std::env::remove_var(k);
         }
     }
@@ -181,6 +191,11 @@ mod tests {
         std::env::set_var("TAB_TREASURY_KEY", "0xtreasury-secret");
         let e = TabEnv::new().unwrap();
         assert_eq!(e.mcp_url("tok_123"), "https://tab.example/mcp/tok_123");
+        std::env::set_var("TAB_API_URL", "https://api.tab.example/");
+        let split = TabEnv::new().unwrap();
+        assert_eq!(split.mcp_url("tok_123"), "https://api.tab.example/mcp/tok_123", "MCP goes straight to the server");
+        assert_eq!(split.public_url, "https://tab.example");
+        std::env::remove_var("TAB_API_URL");
         let d = format!("{e:?}");
         assert!(!d.contains("treasury-secret") && !d.contains("a-long-enough-control-token"), "{d}");
         std::env::remove_var("TAB_PUBLIC_URL");
