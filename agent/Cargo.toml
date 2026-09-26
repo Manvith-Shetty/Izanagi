@@ -1,0 +1,28 @@
+[package]
+name = "agent"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "countersign_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agent"
+path = "src/main.rs"
+
+[dependencies]
+countersign-common = { path = "../common" }
+alloy.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dotenvy.workspace = true
+
+[dev-dependencies]
+# contract test: the agent must decode exactly what the countersigner sends
+countersigner = { path = "../countersigner" }
