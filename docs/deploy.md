@@ -125,6 +125,10 @@ The URLs they must end up with, if you left any out in step 3:
 | `countersigner` | `APPROVAL_PAGE_URL` | the Vercel site: World ID approval links open there |
 | `seller` | `SELLER_PUBLIC_URL` | the `seller` service's Railway domain |
 
+Each file also sets `PORT` to the port that service listens on. Railway health-checks `PORT`,
+which otherwise defaults to 8080, so without it `tab` and `countersigner` never pass their
+healthcheck and hang in "Deploying".
+
 Railway redeploys each service when its variables change. Check the backend on its own:
 
 ```bash
