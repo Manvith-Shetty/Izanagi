@@ -1,4 +1,4 @@
-# Countersign
+# Izanagi
 
 **An escrow wallet for AI agents where a payment can still be stopped *after* it has been made.**
 
@@ -6,7 +6,7 @@ Every agent-payment guard available today screens *before* the agent signs — b
 `exact`/EIP-3009 and ERC-4337 systems, signing **is** spending. Once the signature exists,
 the decision is final.
 
-Countersign is built on x402's `batch-settlement` scheme, where it isn't. The agent signs
+Izanagi is built on x402's `batch-settlement` scheme, where it isn't. The agent signs
 vouchers continuously off-chain; the seller only cashes them in at the end; and Coinbase's
 deployed escrow asks our contract *"is this valid?"* **at claim time**.
 
@@ -16,7 +16,7 @@ settlement — still doesn't get the money.
 ```
 agent signs ────────── 40 minutes of paid API calls ────────── seller claims
      │                                                              │
-  everyone else                                               Countersign
+  everyone else                                               Izanagi
   checks here                                                 checks here
   (already committed)                                         (can still say no)
 ```
@@ -206,6 +206,7 @@ agent/          demo agent: profiles the Bazaar, pays x402 sellers through the c
 seller/         x402 batch-settlement seller: screens payers, verifies vouchers via
                 EIP-1271, cashes them in through the escrow
 scripts/        fork-setup.sh: deploy Countersign on a Base fork and open a channel
+tab/            the Izanagi server and web UI: dashboard, World ID approvals, MCP endpoint
 ```
 
 The seller and agent speak x402 v2 as specified in
