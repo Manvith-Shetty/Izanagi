@@ -1,7 +1,7 @@
 // Screenshot a page into `temporary screenshots/`, next to this file.
 //
-//   node tab/web/screenshot.mjs http://localhost:5173          -> screenshot-N.png
-//   node tab/web/screenshot.mjs http://localhost:5173 hero     -> screenshot-N-hero.png
+//   node tab/ui/screenshot.mjs http://localhost:5173          -> screenshot-N.png
+//   node tab/ui/screenshot.mjs http://localhost:5173 hero     -> screenshot-N-hero.png
 //
 // Works from any working directory. N auto-increments; nothing is ever overwritten.
 import puppeteer from "puppeteer";

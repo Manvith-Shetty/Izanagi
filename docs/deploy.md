@@ -4,7 +4,7 @@ The backend runs on Railway: three services from one repo and one Dockerfile. Th
 on Vercel and forwards `/api` to the backend, so to a browser everything is one site.
 
 ```
-  browser ──► Vercel  (the website: tab/web)
+  browser ──► Vercel  (the website: tab/ui)
                  │  /api/*  proxied, so the login cookie stays first-party
                  ▼
             Railway  tab ──────────► countersigner    (private network only)
@@ -18,7 +18,7 @@ on Vercel and forwards `/api` to the backend, so to a browser everything is one 
 
 | Service | Where | What it is | Public? | Port | Volume |
 |---|---|---|---|---|---|
-| website | Vercel | `tab/web`: landing, sign-up, dashboard, approval pages | yes | | |
+| website | Vercel | `tab/ui`: landing, sign-up, dashboard, approval pages | yes | | |
 | `tab` | Railway | the API and the MCP server; deploys and funds each person's wallet | yes | 3000 | `/data` |
 | `countersigner` | Railway | risk screening, World ID, the kill switch; holds the oracle key | **no** | 8787 | `/data` |
 | `seller` | Railway | the demo shop that goes bad on purpose | yes | 8080 | none |
@@ -138,12 +138,12 @@ curl https://<seller service>.up.railway.app/health        # payerScreening true
 
 ## 5. Vercel: the website
 
-1. In [`tab/web/vercel.json`](../tab/web/vercel.json), replace both
+1. In [`tab/ui/vercel.json`](../tab/ui/vercel.json), replace both
    `REPLACE-WITH-TAB-BACKEND.up.railway.app` with the `tab` service's Railway domain. Commit
    and push.
 2. **Vercel → Add New → Project →** import this repo.
    - **Project Name**: the name you picked in step 2
-   - **Root Directory**: `tab/web`
+   - **Root Directory**: `tab/ui`
    - Framework, build command (`npm run build`) and output (`dist`) come from `vercel.json`
    - no environment variables: the site holds no secrets, and finds the API through the proxy
 3. **Deploy.**
@@ -185,5 +185,5 @@ You need MetaMask with a little ETH and a few USDC on Base.
   from a browser; no World App is needed.
 - **Changing limits**: `AUTONOMOUS_LIMIT` (countersigner) is what an AI may spend per tab before
   asking; `TAB_MAX_PRICE` (tab) is the most it pays for a single call.
-- **Changing the backend's domain** means editing `tab/web/vercel.json` and redeploying the
+- **Changing the backend's domain** means editing `tab/ui/vercel.json` and redeploying the
   website; Vercel's rewrites cannot read environment variables.

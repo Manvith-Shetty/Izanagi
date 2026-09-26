@@ -103,7 +103,7 @@ the real escrow, and [`TabFlow.t.sol`](contracts/test/TabFlow.t.sol) keeps it cl
 ## Architecture
 
 ```
-  you: browser + MetaMask ──────────► website (Vercel · tab/web)
+  you: browser + MetaMask ──────────► website (Vercel · tab/ui)
      │                                    │  /api, proxied: one origin, first-party login cookie
      │ creates, owns and funds            ▼
      │ your own wallet               tab (Railway) ◄──── MCP ──── your AI (Claude)
@@ -322,7 +322,7 @@ seller/         x402 batch-settlement seller: screens payers, verifies vouchers 
 scripts/        fork-setup.sh: deploy Countersign on a Base fork and open a channel;
                 railway-setup.sh: generate and fund the production config
 tab/            the Izanagi server: API, MCP endpoint, sign-up, the tabs each person's AI opens
-tab/web/        the website (Vercel): sign-up, dashboard, World ID approvals, MetaMask
+tab/ui/         the website (Vercel): sign-up, dashboard, World ID approvals, MetaMask
 ```
 
 The seller and agent speak x402 v2 as specified in

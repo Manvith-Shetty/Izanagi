@@ -112,7 +112,7 @@ impl TabEnv {
             max_price: get_from_env_unsafe("TAB_MAX_PRICE").unwrap_or(100_000), // 0.10 USDC a call
             web_dir: non_empty("TAB_WEB_DIR")
                 .map(Into::into)
-                .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/web/dist").into()),
+                .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/ui/dist").into()),
             state_dir: non_empty("TAB_STATE_DIR")
                 .map(Into::into)
                 .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/.state").into()),

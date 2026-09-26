@@ -10,9 +10,9 @@
 # ---- the website --------------------------------------------------------------------------
 FROM node:22-slim AS web
 WORKDIR /web
-COPY tab/web/package.json tab/web/package-lock.json ./
+COPY tab/ui/package.json tab/ui/package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY tab/web/ ./
+COPY tab/ui/ ./
 RUN npm run build
 
 # ---- the services -------------------------------------------------------------------------

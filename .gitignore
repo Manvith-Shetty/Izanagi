@@ -9,9 +9,7 @@ node_modules/
 lib/forge-std/
 contracts/fixture.json
 
-# tab/web frontend
-tab/web/dist/
-tab/web/temporary screenshots/
+# tab/ui frontend
 tab/ui/dist/
 tab/ui/temporary screenshots/
 

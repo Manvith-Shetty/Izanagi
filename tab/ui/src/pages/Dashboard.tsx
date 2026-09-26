@@ -1,337 +1,388 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import { Footer, Header, SampleNotice } from "../components/Chrome";
-import { FeedLine } from "../components/FeedLine";
-import { OwnerBrake } from "../components/OwnerBrake";
-import { CopyField } from "../components/CopyField";
-import { ActionError, closeTab, logout, reopenTab } from "../lib/api";
-import { useFeed, useMe, useNow } from "../lib/hooks";
-import { clock, short, usdcShort } from "../lib/format";
-import type { Approval, Tab } from "../lib/types";
+import { api, clock, left, scan, short, usd, type Listing, type Me, type Outcome, type Tab } from "../api";
+import { Brand, CopyField, useCountdown } from "../components/bits";
+import { Money } from "../components/Money";
 
-/** Intercepta's toxic score against the refusal threshold. */
-function Score({ score }: { score: number }) {
-  const s = Math.max(0, Math.min(100, score));
-  const tone = s >= 60 ? "bg-beni" : s >= 30 ? "bg-kin" : "bg-tide";
-  return (
-    <div className="flex items-center gap-r2" title="Intercepta toxic score. Izanagi closes the tab at 60.">
-      <div className="relative h-1.5 w-20 overflow-hidden rounded-full bg-mist-deep">
-        <div className={`absolute inset-0 origin-left rounded-full ${tone}`} style={{ transform: `scaleX(${s / 100})`, transition: "transform 600ms var(--ease-out-soft)" }} />
-        <div className="absolute inset-y-0 left-[60%] w-px bg-sumi/40" />
-      </div>
-      <span className={`num text-[0.82rem] ${s >= 60 ? "font-semibold text-beni" : "text-stone"}`}>{s.toFixed(0)}</span>
-    </div>
-  );
+type FeedItem = { id: number; at: number; kind: string; [k: string]: unknown };
+
+/** One event from the live feed, in plain words. `null` for events not worth a line. */
+function describe(i: FeedItem, name: (seller: string) => string): { text: string; stop?: boolean } | null {
+  const seller = typeof i.seller === "string" ? name(i.seller) : "a seller";
+  switch (i.kind) {
+    case "screened":
+      return i.verdict === "pay" ? null : { text: `Checked ${seller}: ${i.verdict}. ${i.reason}` };
+    case "purchase":
+      return { text: `Paid ${usd(i.price as number)} to ${seller}.` };
+    case "purchase_refused":
+      return { text: `Refused to pay ${seller}: ${i.reason}`, stop: true };
+    case "tab_opened":
+      return { text: `Opened a ${usd(i.deposit as number)} tab with ${seller}.` };
+    case "tab_topped_up":
+      return { text: `Added ${usd(i.deposit as number)} to your tab with ${seller}.` };
+    case "approval_needed":
+    case "approval_requested":
+      return i.purpose === "enroll" ? null : { text: `Waiting for your approval (${i.purpose === "restore" ? "reopen a tab" : "raise a tab's limit"}).` };
+    case "approval_granted":
+      return { text: "You approved it with World ID." };
+    case "approval_denied":
+      return { text: `Not approved: ${String(i.reason).replaceAll("_", " ")}.`, stop: true };
+    case "human_bound":
+      return { text: "Your wallet is now tied to your World ID." };
+    case "revoked":
+      return { text: `Closed your tab with ${seller}. Its uncollected ${usd((i.value_stopped as number) ?? 0)} won't be paid.`, stop: true };
+    case "restored":
+      return { text: `Reopened your tab with ${seller}.` };
+    case "seller_claimed":
+      return { text: `${seller} cashed in ${usd(i.amount as number)}. That part is final now.` };
+    case "account_created":
+      return { text: `You created your wallet. It belongs to ${short(String(i.owner))}.` };
+    case "deposited":
+      return { text: `You added ${usd(i.amount as number)} from ${short(String(i.from))}.` };
+    default:
+      return null;
+  }
 }
 
-function TabRow({
-  tab,
-  t,
-  canAct,
-  onClose,
-  onReopen,
-  busy,
-}: {
-  tab: Tab;
-  t: number;
-  canAct: boolean;
-  onClose: (tab: Tab) => void;
-  onReopen: (tab: Tab) => void;
-  busy: boolean;
-}) {
-  const [confirming, setConfirming] = useState(false);
-  const timer = useRef<number | undefined>(undefined);
-  const closed = tab.status === "closed";
-  const left = tab.expiry - t;
-  const live = tab.status === "open" && left > 0;
+function TabReceipt({ tab, me, onChange }: { tab: Tab; me: Me; onChange: () => void }) {
+  const secs = useCountdown(tab.expiry);
+  const [busy, setBusy] = useState(false);
+  const [justStamped, setJustStamped] = useState(false);
+  const [error, setError] = useState<string>();
+  const nav = useNavigate();
+  const lines = me.receipts.filter((r) => r.seller.toLowerCase() === tab.seller.toLowerCase()).slice(0, 8);
+  const name = tab.service ?? short(tab.seller);
+  const openLines = Math.max(0, Math.round((tab.charged - tab.claimed) / Math.max(tab.price, 1)));
 
-  const close = () => {
-    if (!confirming) {
-      setConfirming(true);
-      window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(() => setConfirming(false), 4000);
-      return;
+  const close = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.close(tab.seller, "closed from the dashboard");
+      setJustStamped(true);
+      onChange();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
     }
-    setConfirming(false);
-    onClose(tab);
+  };
+  const reopen = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const a = await api.reopen(tab.seller);
+      nav(`/approve/${a.id}`);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
   };
 
   return (
-    <li className={`grid grid-cols-[1fr_auto] items-center gap-x-r4 gap-y-r3 px-r4 py-r4 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_7.5rem_9.5rem] md:px-r5 ${closed ? "bg-beni-wash/35" : ""}`}>
-      <div className="min-w-0">
-        <p className="truncate font-semibold text-sumi">{tab.service ?? short(tab.seller)}</p>
-        <div className="mt-r1 flex flex-wrap items-center gap-x-r3 gap-y-r1">
-          {tab.service && <span className="hex text-[0.8rem] text-stone">{short(tab.seller)}</span>}
-          {tab.riskScore != null && <Score score={tab.riskScore} />}
+    <article className="receipt" style={{ marginBottom: 22 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+        <div>
+          <div className="head">{name}</div>
+          <div className="sub">
+            {short(tab.seller)} · {usd(tab.price)} a call
+            {tab.riskScore != null ? ` · risk ${tab.riskScore}` : ""}
+          </div>
         </div>
+        <span className={`chip ${tab.status === "closed" ? "closed" : tab.status === "open" ? "open" : ""}`}>
+          {tab.status === "closed" ? "Closed" : tab.status === "open" ? "Open" : "Lapsed"}
+        </span>
       </div>
-
-      <div className="text-right md:text-left">
-        {closed ? (
-          <p className="num text-[1.05rem] font-semibold text-beni line-through decoration-1">{usdcShort(tab.saved)} USDC</p>
-        ) : (
-          <p className={`num text-[1.05rem] font-semibold ${live ? "text-kin" : "text-stone"}`}>{usdcShort(tab.stoppable)} USDC</p>
+      <hr />
+      <div style={{ position: "relative" }}>
+        {lines.length === 0 && <div className="muted">No purchases yet.</div>}
+        {lines.map((r, i) => {
+          // the newest `openLines` purchases are the ones the seller has not cashed in yet
+          const uncashed = i < openLines;
+          const open = uncashed && tab.status === "open";
+          const stopped = uncashed && tab.status === "closed";
+          return (
+            <div key={`${r.at}-${i}`} className={`line ${open ? "open" : "settled"} ${stopped ? "void" : ""}`}>
+              <span className="what">
+                {clock(r.at)} · call {Math.round(r.cumulative / Math.max(r.price, 1))}
+                <span className="note">
+                  {stopped ? "screened, signed · stopped before collection" : r.verdict === "pay" ? "screened, paid" : r.verdict}
+                </span>
+              </span>
+              <span className="amt">{usd(r.price)}</span>
+            </div>
+          );
+        })}
+        {tab.status === "closed" && tab.saved > 0 && (
+          <span className={`stamp ${justStamped ? "slam" : ""}`} style={{ right: 4, top: 4 }}>
+            STOPPED
+          </span>
         )}
-        <p className="text-[0.82rem] text-stone">
-          {tab.requests} paid call{tab.requests === 1 ? "" : "s"}, {usdcShort(tab.claimed)} cashed in
-        </p>
       </div>
-
-      <div className="text-[0.85rem]">
-        {closed ? (
-          <p className="leading-snug text-beni-deep">Closed. The seller can't collect this.</p>
-        ) : live ? (
-          <>
-            <p className="num font-semibold text-sumi">{clock(left)}</p>
-            <p className="leading-snug text-stone">left to claim</p>
-          </>
-        ) : (
-          <p className="leading-snug text-stone">Idle. Nothing claimable.</p>
-        )}
+      <hr />
+      <div className="line">
+        <span className="what">Charged</span>
+        <span className="amt">{usd(tab.charged)}</span>
       </div>
-
-      <div className="col-span-2 flex md:col-span-1 md:justify-end">
-        {closed ? (
-          <button type="button" className="btn btn-quiet w-full md:w-auto" disabled={!canAct || busy} onClick={() => onReopen(tab)}>
-            Ask to reopen
+      <div className="line settled">
+        <span className="what">Cashed in by the seller</span>
+        <span className="amt">{usd(tab.claimed)}</span>
+      </div>
+      {tab.status === "open" && (
+        <div className="line open">
+          <span className="what">
+            Not yet collected
+            <span className="note">{tab.stoppable > 0 ? `can still be stopped · the seller may collect for ${left(secs)} more` : "nothing outstanding"}</span>
+          </span>
+          <span className="amt">{usd(tab.stoppable)}</span>
+        </div>
+      )}
+      {tab.status === "closed" && (
+        <div className="line total" style={{ color: "var(--stamp)" }}>
+          <span className="what">Stopped before collection</span>
+          <span className="amt">{usd(tab.saved)}</span>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem", flexWrap: "wrap", fontFamily: "var(--display)" }}>
+        {tab.status === "open" ? (
+          <button className="btn small stop" disabled={busy} onClick={close}>
+            {busy ? "Closing…" : "Close tab"}
           </button>
         ) : (
-          <button type="button" className={`btn w-full md:w-auto ${confirming ? "btn-seal" : "btn-quiet text-beni"}`} disabled={!canAct || busy} onClick={close}>
-            {busy ? "Closing" : confirming ? "Confirm close" : "Close tab"}
+          <button className="btn small ghost" disabled={busy} onClick={reopen}>
+            {busy ? "Asking World ID…" : "Reopen with World ID"}
           </button>
         )}
+        {tab.openTx && scan("tx", tab.openTx, me.network.fork) && (
+          <a className="btn small ghost" href={scan("tx", tab.openTx, me.network.fork)!} target="_blank" rel="noreferrer">
+            See it on Basescan
+          </a>
+        )}
       </div>
-    </li>
+      {error && (
+        <div className="error" style={{ marginTop: "0.8rem", fontFamily: "var(--display)" }}>
+          {error}
+        </div>
+      )}
+    </article>
   );
 }
 
-function PendingApproval({ a, t, name }: { a: Approval; t: number; name: (addr: string) => ReactNode }) {
+function TryIt({ listings, onDone }: { listings: Listing[]; onDone: () => void }) {
+  const [busy, setBusy] = useState<string>();
+  const [result, setResult] = useState<Outcome>();
+  const waiting = useRef<string | undefined>(undefined);
+
+  const buy = async (url: string) => {
+    setBusy(url);
+    setResult(undefined);
+    try {
+      let o = await api.buy(url);
+      setResult(o);
+      // a person must approve: keep waiting, a request at a time
+      while (o.outcome === "needs_approval" || o.outcome === "still_pending") {
+        const id = o.outcome === "needs_approval" ? o.approvalId : o.approval_id;
+        waiting.current = id;
+        o = await api.wait(id);
+        if (waiting.current !== id) return;
+        if (o.outcome !== "still_pending") setResult(o);
+      }
+    } catch (e) {
+      setResult({ outcome: "unpayable", reason: (e as Error).message });
+    } finally {
+      setBusy(undefined);
+      onDone();
+    }
+  };
+
   return (
-    <li className="flex flex-wrap items-center gap-r3 px-r4 py-r3 md:px-r5">
-      <span className="size-2 rounded-full bg-kin" aria-hidden="true" />
-      <p className="min-w-0 flex-1 text-[0.93rem]">
-        {a.purpose === "restore" ? "Reopen the tab with " : <>Spend up to <span className="num font-semibold">{usdcShort(a.amount)} USDC</span> with </>}
-        {name(a.seller)}
-        <span className="text-stone">, expires in {clock(a.expiresAt - t)}</span>
+    <div className="panel">
+      <h3>Try it</h3>
+      <p className="muted" style={{ fontSize: "var(--t-sm)", marginBottom: "0.8rem" }}>
+        Buy one call yourself, exactly the way your AI would.
       </p>
-      <Link to={`/approve/${a.id}`} className="btn btn-primary min-h-9 text-[0.88rem]">
-        Review
-      </Link>
-    </li>
-  );
-}
-
-function Figure({ label, value, tone, note }: { label: string; value: ReactNode; tone: string; note: string }) {
-  return (
-    <div className="px-r4 py-r4 md:px-r5">
-      <p className="text-[0.85rem] text-stone">{label}</p>
-      <p className={`display num mt-r1 text-[2.2rem] leading-none tracking-[-0.02em] md:text-[2.6rem] ${tone}`}>{value}</p>
-      <p className="mt-r2 text-[0.85rem] leading-snug text-stone">{note}</p>
+      <div style={{ display: "grid", gap: "0.5rem" }}>
+        {listings.filter((l) => l.source === "curated").map((l) => (
+          <button key={l.url} className="btn small ghost" style={{ justifyContent: "space-between" }} disabled={!!busy} onClick={() => buy(l.url)}>
+            <span>{l.name}</span>
+            <span className="mono">{busy === l.url ? "…" : usd(l.price)}</span>
+          </button>
+        ))}
+      </div>
+      {result && (
+        <div style={{ marginTop: "0.9rem", fontSize: "var(--t-sm)" }}>
+          {result.outcome === "paid" && (
+            <div className="notice">
+              Paid {usd(result.price)} to {result.service ?? short(result.seller)}. It got back:
+              <pre className="mono" style={{ whiteSpace: "pre-wrap", margin: "0.5rem 0 0", maxHeight: 140, overflow: "auto" }}>
+                {JSON.stringify(result.data, null, 1).slice(0, 600)}
+              </pre>
+            </div>
+          )}
+          {result.outcome === "needs_approval" && (
+            <div className="notice">
+              This one needs your OK: {result.reason}.{" "}
+              <a href={`/approve/${result.approvalId}`} target="_blank" rel="noreferrer">
+                Approve it with World ID
+              </a>
+              . Waiting…
+            </div>
+          )}
+          {(result.outcome === "refused" || result.outcome === "unpayable") && <div className="error">Not paid: {result.reason}</div>}
+          {result.outcome === "denied" && <div className="error">Not approved ({result.reason.replaceAll("_", " ")}). Nothing was paid.</div>}
+        </div>
+      )}
     </div>
-  );
-}
-
-function SignedOut() {
-  return (
-    <section className="surface-raised max-w-[40rem] rounded-2xl p-r5">
-      <h2 className="display text-[1.8rem] tracking-[-0.02em]">Sign in to see your tabs</h2>
-      <p className="mt-r2 text-[0.95rem] text-sumi-soft">
-        Your wallet and every payment your agent makes live behind your World ID. One person gets one wallet, however many agents they
-        connect to it.
-      </p>
-      <Link to="/start" className="btn btn-primary mt-r4">
-        Sign in with World ID
-      </Link>
-    </section>
   );
 }
 
 export default function Dashboard() {
-  const query = useMe();
-  const state = query.data;
-  const t = useNow();
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const [busy, setBusy] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const nav = useNavigate();
+  const [me, setMe] = useState<Me>();
+  const [listings, setListings] = useState<Listing[]>([]);
+  const [feed, setFeed] = useState<FeedItem[]>([]);
+  const [error, setError] = useState<string>();
+  const refreshing = useRef<number | undefined>(undefined);
 
-  const me = state && state.kind !== "signed_out" ? state.me : undefined;
-  const sample = state?.kind === "sample";
-  const canAct = state?.kind === "signed_in";
-  const feed = useFeed(state?.kind === "signed_in" ? "live" : sample ? "sample" : "off");
-  const firstIds = useRef<Set<number> | null>(null);
-  if (feed.items.length && firstIds.current === null) firstIds.current = new Set(feed.items.map((i) => i.id));
+  const refresh = useCallback(() => {
+    api
+      .me()
+      .then(setMe)
+      .catch((e) => (e.status === 401 ? nav("/start", { replace: true }) : setError(e.message)));
+  }, [nav]);
 
-  const tabs = useMemo(
-    () => [...(me?.tabs ?? [])].sort((a, b) => Number(a.status === "closed") - Number(b.status === "closed") || a.expiry - b.expiry),
-    [me],
-  );
-  const names = useMemo(() => new Map(tabs.filter((x) => x.service).map((x) => [x.seller.toLowerCase(), x.service])), [tabs]);
-  const name = useCallback(
-    (addr: string): ReactNode => {
-      const l = names.get(addr.toLowerCase());
-      return l ? <span className="font-semibold">{l}</span> : <span className="hex">{short(addr)}</span>;
-    },
-    [names],
-  );
+  useEffect(() => {
+    refresh();
+    api.catalog().then((r) => setListings(r.listings)).catch(() => {});
+    const es = new EventSource("/api/stream");
+    es.addEventListener("item", (e) => {
+      const item = JSON.parse((e as MessageEvent).data) as FeedItem;
+      setFeed((f) => (f.some((x) => x.id === item.id) ? f : [item, ...f].slice(0, 60)));
+      window.clearTimeout(refreshing.current);
+      refreshing.current = window.setTimeout(refresh, 500);
+    });
+    return () => es.close();
+  }, [refresh]);
 
-  const liveTabs = tabs.filter((x) => x.status === "open" && x.expiry > t);
-  const nextLapse = liveTabs.length ? Math.min(...liveTabs.map((x) => x.expiry)) - t : null;
-  const pending = (me?.approvals ?? []).filter((a) => a.status === "pending" && a.expiresAt > t);
+  if (error) return <main className="wrap" style={{ padding: "3rem var(--gutter)" }}><div className="error">{error}</div></main>;
+  if (!me) return <main className="wrap" style={{ padding: "3rem var(--gutter)" }}><p className="muted">Opening your Tab…</p></main>;
 
-  const run = async (seller: string, fn: () => Promise<unknown>, ok: string) => {
-    setBusy(seller);
-    setNotice(null);
-    try {
-      await fn();
-      setNotice({ tone: "ok", text: ok });
-      qc.invalidateQueries({ queryKey: ["me"] });
-    } catch (e) {
-      if (e instanceof ActionError && e.status === 401) qc.invalidateQueries({ queryKey: ["me"] });
-      setNotice({ tone: "err", text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const onClose = (tab: Tab) =>
-    run(tab.seller, () => closeTab(tab.seller, "closed from the dashboard"), `Closed the tab with ${tab.service ?? short(tab.seller)}. What it signed and hasn't cashed in can no longer be claimed.`);
-  const onReopen = (tab: Tab) =>
-    run(
-      tab.seller,
-      async () => {
-        const r = await reopenTab(tab.seller);
-        navigate(`/approve/${r.id}`);
-      },
-      "Sent the request to World App.",
-    );
-  const signOut = async () => {
-    await logout().catch(() => undefined);
-    qc.invalidateQueries({ queryKey: ["me"] });
-  };
+  const name = (seller: string) =>
+    me.tabs.find((t) => t.seller.toLowerCase() === seller.toLowerCase())?.service ?? short(seller);
+  const walletLink = scan("address", me.account.wallet, me.network.fork);
 
   return (
-    <div className="ground grain min-h-dvh">
-      <SampleNotice show={sample} />
-      <Header>
-        {canAct && (
-          <button type="button" className="btn btn-quiet min-h-10 px-r4 text-[0.88rem]" onClick={signOut}>
+    <>
+      <header className="wrap bar">
+        <Brand />
+        <nav>
+          <span className="chip live hide-sm">{me.network.fork ? "Base fork" : "Base mainnet"}</span>
+          <span className="mono hide-sm">{short(me.account.wallet)}</span>
+          <button className="linkish" onClick={() => api.logout().then(() => nav("/"))}>
             Sign out
           </button>
-        )}
-      </Header>
+        </nav>
+      </header>
 
-      <main className="mx-auto max-w-[76rem] px-r4 pb-r7 md:px-r5">
-        <div className="flex flex-col gap-r3 pb-r5 pt-r4 md:flex-row md:items-end">
-          <div>
-            <h1 className="display text-[2.5rem] md:text-[3.2rem]">Your agent's tabs</h1>
-            {me && (
-              <p className="mt-r2 text-[0.93rem] text-sumi-soft">
-                Wallet <span className="hex text-sumi">{short(me.account.wallet, 8, 6)}</span> on {me.network.fork ? "a local Base fork" : "Base"}
-                {me.wallet && (
-                  <>
-                    , holding <span className="num text-sumi">{usdcShort(me.wallet.usdc)} USDC</span>
-                  </>
-                )}
-                . Approvals go to one verified person.
+      <main className="wrap" style={{ display: "grid", gap: 28, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", paddingBottom: "4rem", alignItems: "start" }}>
+        <section style={{ gridColumn: "span 1" }}>
+          <h2 style={{ margin: "0.5rem 0 1.2rem" }}>Your tabs</h2>
+          {me.approvals.filter((a) => a.status === "pending").map((a) => (
+            <div key={a.id} className="notice" style={{ marginBottom: 16 }}>
+              Your OK is needed:{" "}
+              {a.purpose === "restore" ? "reopen a tab" : `raise a tab to ${usd(a.amount)}`}.{" "}
+              <Link to={`/approve/${a.id}`}>Review and approve</Link>
+            </div>
+          ))}
+          {me.tabs.length === 0 ? (
+            <div className="receipt">
+              <div className="head">No tabs yet</div>
+              <p className="muted" style={{ marginTop: "0.5rem", fontFamily: "var(--display)" }}>
+                A tab opens the first time you or your AI buy from a seller. Try one of the sellers on the right, or connect Claude.
               </p>
+            </div>
+          ) : (
+            me.tabs.map((t) => <TabReceipt key={t.channelId} tab={t} me={me} onChange={refresh} />)
+          )}
+        </section>
+
+        <aside className="side">
+          <div className="stub">
+            <div style={{ fontSize: "var(--t-sm)", color: "#b9beb8" }}>In your wallet</div>
+            <div className="big">{usd(me.wallet?.usdc ?? 0)}</div>
+            <div className="perf" />
+            <div className="row">
+              <span>Held in tabs</span>
+              <span className="mono">{usd(me.totals.escrowed)}</span>
+            </div>
+            <div className="row">
+              <span>Paid so far</span>
+              <span className="mono">{usd(me.totals.spent - me.totals.saved)}</span>
+            </div>
+            <div className="row">
+              <span>Not yet collected</span>
+              <span className="mono">{usd(me.totals.stoppable)}</span>
+            </div>
+            <div className="row">
+              <span>Stopped</span>
+              <span className="mono">{usd(me.totals.saved)}</span>
+            </div>
+            <div className="row">
+              <span>Owner</span>
+              <span className="mono">{me.wallet ? `you (${short(me.wallet.owner)})` : "…"}</span>
+            </div>
+            <div className="row">
+              <span>Wallet</span>
+              <span className="mono">
+                {walletLink ? (
+                  <a href={walletLink} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>
+                    {short(me.account.wallet)}
+                  </a>
+                ) : (
+                  short(me.account.wallet)
+                )}
+              </span>
+            </div>
+          </div>
+
+          <Money me={me} onChange={refresh} />
+
+          <div className="panel">
+            <h3>Connect your AI</h3>
+            <p className="muted" style={{ fontSize: "var(--t-sm)", marginBottom: "0.8rem" }}>
+              This link is yours alone: anyone with it can spend from this Tab, within your limits.
+            </p>
+            <CopyField value={me.mcpUrl} label="Your Tab link" />
+            <p style={{ fontSize: "var(--t-sm)", margin: "0.9rem 0 0.4rem" }}>In Claude Code:</p>
+            <CopyField value={`claude mcp add --transport http tab ${me.mcpUrl}`} label="Claude Code command" />
+            <p className="muted" style={{ fontSize: "var(--t-sm)", marginTop: "0.8rem" }}>
+              In Claude's settings, add it as a custom connector. Then ask: "Use Tab to get the latest Bitcoin price."
+            </p>
+          </div>
+
+          <TryIt listings={listings} onDone={refresh} />
+
+          <div className="panel">
+            <h3>What just happened</h3>
+            {feed.length === 0 ? (
+              <p className="muted" style={{ fontSize: "var(--t-sm)" }}>Live. Everything your AI and your wallet do shows up here.</p>
+            ) : (
+              <ul className="feed">
+                {feed
+                  .map((i) => ({ i, d: describe(i, name) }))
+                  .filter((x) => x.d)
+                  .slice(0, 14)
+                  .map(({ i, d }) => (
+                    <li key={i.id}>
+                      <time>{clock(i.at)}</time>
+                      <span className={d!.stop ? "stop" : ""}>{d!.text}</span>
+                    </li>
+                  ))}
+              </ul>
             )}
           </div>
-        </div>
-
-        {query.isLoading ? (
-          <p className="text-stone">Loading your tabs…</p>
-        ) : state?.kind === "signed_out" ? (
-          <SignedOut />
-        ) : me ? (
-          <>
-            <section aria-label="Summary" className="surface-raised grid divide-y divide-rule/70 rounded-2xl md:grid-cols-3 md:divide-x md:divide-y-0">
-              <Figure label="Signed, not yet claimed" value={usdcShort(me.totals.stoppable)} tone="text-kin" note="USDC your agent has signed for that you can still stop." />
-              <Figure label="Stopped after signing" value={usdcShort(me.totals.saved)} tone="text-beni" note="USDC signed for on tabs you closed, that the seller can never collect." />
-              <Figure
-                label="Next claim window closes in"
-                value={nextLapse === null ? "None open" : clock(nextLapse)}
-                tone="text-sumi"
-                note="Sellers must claim before then. After it, unclaimed vouchers lapse by themselves."
-              />
-            </section>
-
-            <div className="mt-r5 grid gap-r5 lg:grid-cols-12">
-              <div className="flex flex-col gap-r5 lg:col-span-7">
-                {pending.length > 0 && (
-                  <section aria-labelledby="approvals" className="surface-raised overflow-hidden rounded-2xl ring-1 ring-kin/30">
-                    <h2 id="approvals" className="border-b border-rule/70 px-r4 py-r3 font-semibold md:px-r5">
-                      Waiting for you
-                    </h2>
-                    <ul className="divide-y divide-rule/60">
-                      {pending.map((a) => (
-                        <PendingApproval key={a.id} a={a} t={t} name={name} />
-                      ))}
-                    </ul>
-                  </section>
-                )}
-
-                <section aria-labelledby="tabs" className="surface-raised overflow-hidden rounded-2xl">
-                  <div className="flex items-baseline gap-r3 border-b border-rule/70 px-r4 py-r3 md:px-r5">
-                    <h2 id="tabs" className="font-semibold">
-                      Open tabs
-                    </h2>
-                    <span className="text-[0.85rem] text-stone">{liveTabs.length} live</span>
-                  </div>
-                  {tabs.length ? (
-                    <ul className="divide-y divide-rule/60">
-                      {tabs.map((x) => (
-                        <TabRow key={x.channelId} tab={x} t={t} canAct={canAct} busy={busy === x.seller} onClose={onClose} onReopen={onReopen} />
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="px-r5 py-r5">
-                      <p className="font-semibold">No tabs yet</p>
-                      <p className="mt-r1 max-w-[30rem] text-[0.93rem] text-sumi-soft">
-                        A tab opens the first time your agent pays a seller. Connect an agent through the MCP server below and ask it to buy
-                        something.
-                      </p>
-                    </div>
-                  )}
-                  <div aria-live="polite">
-                    {notice && (
-                      <p className={`border-t border-rule/70 px-r4 py-r3 text-[0.9rem] md:px-r5 ${notice.tone === "err" ? "text-beni-deep" : "text-tide"}`}>{notice.text}</p>
-                    )}
-                  </div>
-                </section>
-
-                <OwnerBrake wallet={me.account.wallet} sample={sample} />
-              </div>
-
-              <aside className="flex flex-col gap-r5 lg:col-span-5">
-                <section aria-labelledby="live" className="surface-raised overflow-hidden rounded-2xl">
-                  <div className="flex items-center gap-r3 border-b border-rule/70 px-r4 py-r3 md:px-r5">
-                    <h2 id="live" className="font-semibold">
-                      What happened
-                    </h2>
-                    <span className="ml-auto flex items-center gap-r2 text-[0.82rem] text-stone">
-                      <span className={`size-2 rounded-full ${feed.live ? "bg-tide animate-[breathe_2.4s_ease-in-out_infinite]" : "bg-stone-light"}`} aria-hidden="true" />
-                      {feed.live ? "Live" : feed.sample ? "Sample" : "Reconnecting"}
-                    </span>
-                  </div>
-                  {feed.items.length ? (
-                    <ol className="max-h-[38rem] divide-y divide-rule/50 overflow-y-auto px-r4 md:px-r5">
-                      {feed.items.map((i) => (
-                        <FeedLine key={i.id} item={i} name={name} fresh={!!firstIds.current && !firstIds.current.has(i.id)} />
-                      ))}
-                    </ol>
-                  ) : (
-                    <p className="px-r5 py-r5 text-[0.93rem] text-sumi-soft">Nothing yet. Every screening, signature and closed tab shows up here as it happens.</p>
-                  )}
-                </section>
-                <CopyField label="Connect an agent: MCP server URL" value={me.mcpUrl} />
-              </aside>
-            </div>
-          </>
-        ) : null}
+        </aside>
       </main>
-      <Footer />
-    </div>
+    </>
   );
 }

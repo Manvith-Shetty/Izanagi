@@ -1,250 +1,222 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Footer, Header } from "../components/Chrome";
-import { Slope } from "../components/Slope";
-import { CopyField } from "../components/CopyField";
-import { useCensus, useMe } from "../lib/hooks";
+import { api, usd, type Census } from "../api";
+import { Brand } from "../components/bits";
 
-function Census() {
-  const { data } = useCensus();
-  if (!data || !data.data.measuredAt) return <p className="h-[3.4rem]" />;
-  const c = data.data;
+// Real purchases from our Countersign wallet on Base mainnet, 26 Sep 2026.
+const PROOF = [
+  {
+    what: "BTC 1-minute candles",
+    who: "hyperextend",
+    price: 2000,
+    paid: "https://basescan.org/tx/0xafe253d7ac946616eae09f8e025371174412a5c5a62bb4303c9021a1365f1a99",
+  },
+  {
+    what: "Ethereum block height",
+    who: "onesource",
+    price: 1000,
+    paid: "https://basescan.org/tx/0xd4d8fbb14bf4572dc5b35285646d64c6d3cf69a76d5b8dfbc3f2925c493eaec2",
+  },
+];
+
+type Decision = "paid" | "approved" | "refused" | "stopped";
+const TAG: Record<Decision, string> = {
+  paid: "checked, paid",
+  approved: "over your limit, you approved",
+  refused: "seller flagged, refused",
+  stopped: "sold junk, stopped before collection",
+};
+
+// One of each decision Tab makes. The first two lines are the real mainnet purchases above.
+const EXAMPLE: { what: string; who: string; amt: number; d: Decision }[] = [
+  { what: "BTC 1-minute candles", who: "hyperextend", amt: 2000, d: "paid" },
+  { what: "Ethereum block height", who: "onesource", amt: 1000, d: "paid" },
+  { what: "Market data, 20 calls", who: "a data API", amt: 50000, d: "approved" },
+  { what: "\"Premium API access\"", who: "0x9f3a…e21c", amt: 5_000_000, d: "refused" },
+  { what: "BTC price, 3 calls", who: "a shop gone bad", amt: 3000, d: "stopped" },
+];
+
+function HeroReceipt() {
   return (
-    <p className="max-w-[46rem] text-[1.08rem] leading-[1.7] text-sumi-soft md:text-[1.18rem]">
-      Right now <span className="num font-semibold text-sumi">{(Number(c.escrowUsdc) / 1_000_000).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC</span> sits in x402 escrow on Base. In the last 14
-      days, <span className="num font-semibold text-sumi">{c.channelsLast14d.toLocaleString("en-US")}</span> agent payment channels opened
-      there, and <span className="num font-semibold text-sumi">{c.channels.toLocaleString("en-US")}</span> since it launched, from{" "}
-      {c.payers.toLocaleString("en-US")} wallets. <span className="num font-semibold text-beni">{c.countersignPayers}</span> of those
-      wallets can stop a payment once it is signed.
-      {data.sample && <span className="text-stone"> Measured on Base mainnet, 27 September 2026.</span>}
+    <div className="receipt printing" style={{ maxWidth: 440, width: "100%" }} aria-label="Example receipt">
+      <div className="head reveal">Your AI's payments</div>
+      <div className="sub reveal">an example: every line is a decision Tab made</div>
+      <hr />
+      {EXAMPLE.map((l, i) => (
+        <div key={i} className={`line ${l.d === "refused" || l.d === "stopped" ? "void" : ""}`} style={{ animationDelay: `${250 + i * 240}ms` }}>
+          <span className="what">
+            {l.what}
+            <span className="note">
+              {l.who} · <span className={`decision ${l.d}`}>{TAG[l.d]}</span>
+            </span>
+          </span>
+          <span className="amt">{usd(l.amt)}</span>
+        </div>
+      ))}
+      <hr />
+      <div className="line total">
+        <span className="what">Paid</span>
+        <span className="amt">{usd(53000)}</span>
+      </div>
+      <div className="line">
+        <span className="what">Refused or stopped</span>
+        <span className="amt" style={{ color: "var(--stamp)" }}>{usd(5_003_000)}</span>
+      </div>
+    </div>
+  );
+}
+
+function CensusLine() {
+  const [c, setC] = useState<Census>();
+  useEffect(() => {
+    api.network().then((r) => r.census.channels > 0 && setC(r.census)).catch(() => {});
+  }, []);
+  if (!c) {
+    return <p className="lede">AI agents already pay each other on Base, thousands of times a week, and almost every one of those payments is final the moment it's signed.</p>;
+  }
+  const guarded = c.countersignPayers;
+  return (
+    <p className="lede" style={{ maxWidth: "46rem" }}>
+      Right now on Base, <strong>{c.payers.toLocaleString()}</strong> AI agents have opened{" "}
+      <strong>{c.channels.toLocaleString()}</strong> payment tabs with <strong>{c.sellers}</strong> sellers, holding{" "}
+      <strong>{usd(c.escrowUsdc, true)}</strong>.{" "}
+      {guarded === 0
+        ? "Every one of those payments was final the moment it was signed."
+        : `${guarded === 1 ? "One of those agents is" : `${guarded} of those agents are`} guarded by Tab. For the rest, every payment is final the moment it's signed.`}
     </p>
   );
 }
 
-const checks: [string, boolean][] = [
-  ["Your agent signed this exact voucher", true],
-  ["Intercepta screened the seller and Izanagi countersigned", true],
-  ["That countersignature hasn't expired", true],
-  ["You haven't revoked the seller since", false],
-  ["You haven't paused the wallet since", false],
+const CHECKS: [string, string][] = [
+  ["Who it's paying", "Before a single payment is signed, Intercepta screens the seller for scams, drainers and sanctions. A flagged seller is refused, and the reason is shown."],
+  ["How much", "Each seller gets a limit. Under it, your AI just pays. Over it, the payment waits for you."],
+  ["Who approves", "You do, with a fresh World ID check on your phone. Only your World ID can approve payments from your account."],
+  ["Until it's collected", "Sellers collect later, and Tab keeps checking them. If one turns out to be a scam, its payments are stopped before the money leaves."],
 ];
-
-const verdicts = [
-  { v: "Pay", tone: "text-tide bg-tide-wash", d: "The seller is clean and the amount is within your limits. Izanagi countersigns." },
-  { v: "Cap", tone: "text-kin bg-kin-wash", d: "The seller is fine but the amount isn't. The agent can pay up to your cap and no more." },
-  { v: "Ask", tone: "text-sumi bg-mist-deep", d: "Over your limit. Nothing is signed until you approve it with World ID." },
-  { v: "Refuse", tone: "text-beni bg-beni-wash", d: "A risky seller. No voucher is countersigned, so no payment can ever be claimed." },
-];
-
-type Cell = "yes" | "no" | "after";
-const trust: { who: string; cells: Cell[] }[] = [
-  { who: "Move money", cells: ["no", "no", "yes", "no"] },
-  { who: "Send it to another seller", cells: ["no", "no", "yes", "no"] },
-  { who: "Block a payment", cells: ["no", "yes", "yes", "no"] },
-  { who: "Get the money back", cells: ["no", "no", "yes", "after"] },
-];
-
-function Mark({ c }: { c: Cell }) {
-  if (c === "yes") return <span className="font-semibold text-tide">Yes</span>;
-  if (c === "after") return <span className="text-sumi">Yes, after 15 min</span>;
-  return <span className="text-stone-light">No</span>;
-}
 
 export default function Landing() {
-  const me = useMe();
-  const mcpUrl = me.data?.kind === "signed_in" ? me.data.me.mcpUrl : `${location.origin}/mcp`;
-  const claudeConfig = JSON.stringify({ mcpServers: { izanagi: { type: "http", url: mcpUrl } } }, null, 2);
-
   return (
-    <div className="ground grain min-h-dvh">
-      <Header>
-        <Link to="/dashboard" className="btn btn-primary min-h-10 px-r4 text-[0.9rem]">
-          Open dashboard
-        </Link>
-      </Header>
+    <>
+      <header className="wrap bar">
+        <Brand />
+        <nav>
+          <a href="#checks" className="hide-sm">
+            What it checks
+          </a>
+          <a href="#proof" className="hide-sm">
+            On mainnet
+          </a>
+          <Link className="btn small" to="/start">
+            Get your Tab
+          </Link>
+        </nav>
+      </header>
 
       <main>
-        {/* hero */}
-        <section className="mx-auto max-w-[76rem] px-r4 pb-r6 pt-r5 md:px-r5 md:pt-r6">
-          <h1 className="display text-[2.9rem] text-sumi sm:text-[4rem] lg:text-[5.4rem]">
-            <span className="block">Your agent already paid.</span>
-            <span className="block">You can still take it back.</span>
-          </h1>
-          <p className="mt-r5 max-w-[40rem] text-[1.1rem] text-sumi-soft md:text-[1.2rem]">
-            Izanagi is a wallet for AI agents. It checks every payment again at the moment the seller tries to cash it in, so a seller
-            that turns bad after your agent has paid still gets nothing.
-          </p>
-          <div className="mt-r6">
-            <Slope />
-          </div>
-          <div className="mt-r5">
-            <Census />
-          </div>
-        </section>
-
-        {/* where the check happens */}
-        <section id="how" className="scroll-mt-r5 border-t border-rule/80 bg-paper/60">
-          <div className="mx-auto grid max-w-[76rem] gap-r6 px-r4 py-r7 md:px-r5 lg:grid-cols-12">
-            <div className="lg:col-span-5">
-              <h2 className="display text-[2.2rem] md:text-[2.8rem]">Other guards check before the agent signs. We check again at the claim.</h2>
-              <p className="mt-r4 max-w-[34rem] text-sumi-soft">
-                With most agent wallets, signing is spending: once the signature exists, the money is gone. Izanagi runs on x402 batch
-                settlement, where the agent signs vouchers as it goes and the seller claims them later, through Coinbase's escrow.
-              </p>
-              <p className="mt-r3 max-w-[34rem] text-sumi-soft">
-                At claim time the escrow asks the Izanagi wallet whether each voucher is still valid. Five things have to hold. The
-                last two are read live, when the seller claims.
-              </p>
-            </div>
-            <div className="lg:col-span-7">
-              <div className="surface-raised overflow-hidden rounded-2xl">
-                <table className="w-full text-left text-[0.95rem]">
-                  <caption className="sr-only">What must hold for a seller to claim a voucher</caption>
-                  <thead>
-                    <tr className="border-b border-rule text-[0.82rem] text-stone">
-                      <th scope="col" className="px-r4 py-r3 font-medium">
-                        A voucher can be claimed only if
-                      </th>
-                      <th scope="col" className="w-[9.5rem] px-r4 py-r3 font-medium">
-                        Checkable before signing?
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {checks.map(([c, before]) => (
-                      <tr key={c} className={`border-b border-rule/60 last:border-0 ${before ? "" : "bg-beni-wash/40"}`}>
-                        <td className={`px-r4 py-r3 ${before ? "text-sumi-soft" : "font-semibold text-sumi"}`}>{c}</td>
-                        <td className="px-r4 py-r3">{before ? <span className="text-stone">Yes</span> : <span className="font-semibold text-beni">No</span>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-r3 text-[0.88rem] text-stone">
-                The escrow is Coinbase's deployed <span className="hex">x402BatchSettlement</span> contract on Base. Izanagi didn't write
-                it, which is why the guarantee holds.
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* the two gates */}
-        <section className="mx-auto max-w-[76rem] px-r4 py-r7 md:px-r5">
-          <h2 className="display max-w-[22ch] text-[2.2rem] md:text-[2.8rem]">Every voucher is screened. Anything unusual goes to a person.</h2>
-          <div className="mt-r6 grid gap-r6 lg:grid-cols-2">
-            <div>
-              <h3 className="display text-[1.5rem] tracking-[-0.02em]">Intercepta decides before Izanagi signs</h3>
-              <p className="mt-r3 max-w-[34rem] text-sumi-soft">
-                Izanagi screens the seller, the token and the payment itself through Intercepta before countersigning. Without a verdict
-                there is no countersignature, and without one no voucher can be claimed. If Intercepta is down, Izanagi refuses.
-              </p>
-              <ul className="mt-r4 divide-y divide-rule/70 border-y border-rule/70">
-                {verdicts.map((v) => (
-                  <li key={v.v} className="flex items-baseline gap-r4 py-r3">
-                    <span className={`w-[4.5rem] shrink-0 rounded-md px-r2 py-[0.15rem] text-center text-[0.85rem] font-semibold ${v.tone}`}>{v.v}</span>
-                    <span className="text-[0.95rem] text-sumi-soft">{v.d}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-r3 text-[0.9rem] text-stone">
-                Scores keep moving after a payment. Izanagi re-screens every open tab, and when a seller's score crosses your threshold it
-                revokes them, voiding vouchers that were already signed.
-              </p>
-            </div>
-            <div>
-              <h3 className="display text-[1.5rem] tracking-[-0.02em]">You approve the rest with World ID</h3>
-              <p className="mt-r3 max-w-[34rem] text-sumi-soft">
-                When a payment is over your limit, or you want a closed tab reopened, Izanagi sends the request to your phone. Nothing is
-                signed until a verified person says yes.
-              </p>
-              <div className="surface-raised mt-r4 rounded-2xl p-r4">
-                <p className="text-[0.82rem] text-stone">Your agent is asking to pay</p>
-                <p className="display num mt-r1 text-[2.3rem] leading-none">0.15 USDC</p>
-                <p className="mt-r2 text-[0.95rem] text-sumi-soft">
-                  to <span className="font-semibold text-sumi">onesource</span>, over the 0.10 USDC per-call limit you set.
-                </p>
-                <div className="mt-r4 flex flex-wrap items-center gap-r3">
-                  <span className="hex rounded-lg bg-mist-deep px-r3 py-r2 text-[1.05rem] font-medium tracking-[0.12em]">KQXT-MRWD</span>
-                  <span className="text-[0.88rem] text-stone">Enter this code in World App</span>
-                </div>
-              </div>
-              <p className="mt-r3 text-[0.9rem] text-stone">
-                One approval covers one payment: this amount, to this seller. It can't be reused for another. Denied, expired or
-                cancelled requests sign nothing.
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* trust */}
-        <section className="border-y border-rule/80 bg-sumi text-mist">
-          <div className="mx-auto grid max-w-[76rem] gap-r6 px-r4 py-r7 md:px-r5 lg:grid-cols-12">
-            <div className="lg:col-span-5">
-              <h2 className="display text-[2.2rem] text-paper md:text-[2.8rem]">Izanagi can say no. It can't take your money.</h2>
-              <p className="mt-r4 max-w-[32rem] text-mist/75">
-                Two keys guard the wallet: your agent's, and Izanagi's countersigning key. Neither can move funds on its own. If Izanagi
-                disappears, you withdraw from the escrow yourself after the 15-minute delay.
-              </p>
-            </div>
-            <div className="overflow-x-auto lg:col-span-7">
-              <table className="w-full min-w-[34rem] text-left text-[0.93rem]">
-                <caption className="sr-only">What each key can do</caption>
-                <thead>
-                  <tr className="border-b border-mist/20 text-[0.82rem] text-mist/60">
-                    <th scope="col" className="py-r3 pr-r3 font-medium">
-                      Who can
-                    </th>
-                    <th scope="col" className="px-r3 py-r3 font-medium">
-                      Agent key
-                    </th>
-                    <th scope="col" className="px-r3 py-r3 font-medium">
-                      Izanagi key
-                    </th>
-                    <th scope="col" className="px-r3 py-r3 font-medium">
-                      Both
-                    </th>
-                    <th scope="col" className="px-r3 py-r3 font-medium">
-                      Neither
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="[&_.text-stone-light]:text-mist/35 [&_.text-sumi]:text-paper [&_.text-tide]:text-tide-light">
-                  {trust.map((r) => (
-                    <tr key={r.who} className="border-b border-mist/10 last:border-0">
-                      <th scope="row" className="py-r3 pr-r3 font-medium text-paper">
-                        {r.who}
-                      </th>
-                      {r.cells.map((c, i) => (
-                        <td key={i} className="px-r3 py-r3">
-                          <Mark c={c} />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-
-        {/* connect */}
-        <section id="connect" className="mx-auto grid max-w-[76rem] scroll-mt-r5 gap-r6 px-r4 py-r7 md:px-r5 lg:grid-cols-12">
-          <div className="lg:col-span-5">
-            <h2 className="display text-[2.2rem] md:text-[2.8rem]">Let your own agent pay through it</h2>
-            <p className="mt-r4 max-w-[32rem] text-sumi-soft">
-              Izanagi is a remote MCP server. Add it to Claude or any MCP client, and your agent can pay real x402 sellers in USDC on Base,
-              with every payment screened, capped and stoppable. Watch it happen on the dashboard.
+        <section className="wrap" style={{ display: "grid", gap: "3rem", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", alignItems: "center", padding: "3rem var(--gutter) 4.5rem" }}>
+          <div style={{ display: "grid", gap: "1.4rem" }}>
+            <h1 className="hero-title">Every payment your AI makes, checked first.</h1>
+            <p className="lede">
+              Tab gives your AI its own spending account. It screens every seller, holds each payment to your limits, and asks
+              you before anything bigger goes through.
             </p>
-            <Link to="/dashboard" className="btn btn-quiet mt-r4">
-              Watch the dashboard
-            </Link>
+            <div style={{ display: "flex", gap: "0.8rem", flexWrap: "wrap", alignItems: "center" }}>
+              <Link className="btn" to="/start">
+                Get your Tab
+              </Link>
+              <span className="muted" style={{ fontSize: "var(--t-sm)" }}>
+                One per person, verified with World ID.
+              </span>
+            </div>
           </div>
-          <div className="flex flex-col gap-r4 lg:col-span-7">
-            <CopyField label="MCP server URL" value={mcpUrl} />
-            <CopyField label="Claude Desktop config" value={claudeConfig} multiline />
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <HeroReceipt />
+          </div>
+        </section>
+
+        <section style={{ background: "var(--counter-deep)", padding: "2.4rem 0" }}>
+          <div className="wrap">
+            <CensusLine />
+          </div>
+        </section>
+
+        <section id="checks" className="wrap" style={{ padding: "4rem var(--gutter)" }}>
+          <h2 style={{ marginBottom: "0.6rem" }}>What Tab checks, every payment</h2>
+          <p className="muted" style={{ marginBottom: "2rem" }}>
+            Four questions, answered before and after your AI pays.
+          </p>
+          <ol className="ticket four">
+            {CHECKS.map(([title, body]) => (
+              <li key={title}>
+                <h3>{title}</h3>
+                <p className="muted">{body}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section className="wrap" style={{ padding: "0 var(--gutter) 4rem", display: "grid", gap: "2.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
+          <div style={{ display: "grid", gap: "1rem", alignContent: "start" }}>
+            <h2>How it works</h2>
+            <p>
+              <strong>Prove you're a person</strong> with World ID and get your own Tab. <strong>Connect your AI</strong> by
+              pasting your Tab link into Claude. Then <strong>let it pay</strong> for data and tools across the web.
+            </p>
+            <p>
+              Small, clean payments just happen. Bigger ones ping your phone. Suspicious ones never get signed.
+            </p>
+          </div>
+          <div style={{ display: "grid", gap: "1rem", alignContent: "start" }}>
+            <h2>What Tab can't do</h2>
+            <p>
+              Tab can decline a payment, but it can never move your money. Its key only says no, and every payment also needs your
+              AI's own signature.
+            </p>
+            <p>
+              The final check runs on chain: when a seller collects, Coinbase's escrow asks your wallet whether the payment still
+              stands. That answer comes from your wallet's rules, not from a server.
+            </p>
+          </div>
+        </section>
+
+        <section id="proof" style={{ background: "var(--paper)", padding: "4rem 0" }}>
+          <div className="wrap" style={{ display: "grid", gap: "1.5rem" }}>
+            <h2>Already running on Base</h2>
+            <p className="muted">
+              Our wallet paid two sellers nobody at Tab knows, on mainnet, with real USDC. Both were screened first, and when
+              each one collected, Coinbase's escrow checked with our wallet before paying out.
+            </p>
+            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "0.8rem" }}>
+              {PROOF.map((p) => (
+                <li key={p.paid} className="proof">
+                  <span>
+                    {p.what} from {p.who}
+                  </span>
+                  <span>
+                    {usd(p.price)} ·{" "}
+                    <a href={p.paid} target="_blank" rel="noreferrer">
+                      collected, on Basescan
+                    </a>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div>
+              <Link className="btn" to="/start">
+                Get your Tab
+              </Link>
+            </div>
           </div>
         </section>
       </main>
-      <Footer />
-    </div>
+
+      <footer className="wrap footer">
+        Built at ETHGlobal Tokyo 2026 on Coinbase's x402 escrow, World ID and Intercepta.{" "}
+        <a href="https://sourcify.dev/#/lookup/0x81E0FAC8aA64cE0E95Ec43337568c0744aB0C70b" target="_blank" rel="noreferrer">
+          Read the wallet's code
+        </a>
+        .
+      </footer>
+    </>
   );
 }

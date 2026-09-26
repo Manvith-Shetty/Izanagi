@@ -8,7 +8,8 @@ scripts/.env*
 **/.state
 target
 **/node_modules
-tab/web/dist
+tab/ui/dist
+tab/ui/temporary screenshots
 
 # the contracts are not built in the image (Tab embeds the compiled bytecode in tab/assets)
 contracts/out

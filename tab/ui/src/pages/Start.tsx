@@ -1,44 +1,104 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import { Mark } from "../components/Chrome";
-import { Qr } from "../components/Qr";
-import { loadMe, signup, signupPoll } from "../lib/api";
-import { useNow } from "../lib/hooks";
-import { clock } from "../lib/format";
-import type { Stage } from "../lib/types";
+import { useNavigate } from "react-router-dom";
+import { api, left, type Stage } from "../api";
+import { Brand, Qr, useCountdown } from "../components/bits";
+import { connect, explain, send, sign } from "../metamask";
 
-// The server's own names for the steps after World ID (tab/src/onboard.rs), in order.
-const STEPS = ["verify with World ID", "deploying your wallet", "binding it to your World ID", "adding your free trial funds"];
-const LABELS = ["Prove you're a person with World ID", "Deploy your wallet on Base", "Bind the wallet to your World ID", "Add your free trial funds"];
+const STEPS = ["verify with World ID", "create your wallet with MetaMask", "tie it to your World ID"];
+
+function Verifying({ stage }: { stage: Extract<Stage, { stage: "verifying" }> }) {
+  const secs = useCountdown(stage.expires_at);
+  return (
+    <div style={{ display: "grid", gap: "1.2rem" }}>
+      <p>Open this on your phone and approve with World ID. It checks you're a real, unique person. Tab never learns who you are.</p>
+      <div style={{ display: "flex", gap: "1.4rem", alignItems: "center", flexWrap: "wrap" }}>
+        <Qr value={stage.world_url} label="QR code for the World ID link" />
+        <div style={{ display: "grid", gap: "0.6rem" }}>
+          <a className="btn" href={stage.world_url} target="_blank" rel="noreferrer">
+            Verify with World ID
+          </a>
+          <span className="muted" style={{ fontSize: "var(--t-sm)" }}>
+            If asked for a code: <span className="code" style={{ fontSize: "var(--t-md)" }}>{stage.user_code}</span>
+          </span>
+          <span className="muted" style={{ fontSize: "var(--t-sm)" }}>Expires in {left(secs)}.</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The person's own MetaMask signs for this signup, then creates their wallet and pays for it. */
+function CreateWallet({ id, stage, onStage }: { id: string; stage: Extract<Stage, { stage: "create_wallet" }>; onStage: (s: Stage) => void }) {
+  const [step, setStep] = useState<string>();
+  const [error, setError] = useState<string>();
+
+  const create = async () => {
+    setError(undefined);
+    try {
+      setStep("Connecting MetaMask…");
+      const from = await connect(stage.chain_id);
+      setStep("Sign in MetaMask to say this signup is yours. It costs nothing.");
+      const signature = await sign(from, stage.message);
+      const { tx } = await api.signupWallet(id, from, signature);
+      setStep("Confirm creating your wallet in MetaMask…");
+      const hash = await send(from, tx);
+      setStep("Waiting for your wallet to land on Base…");
+      const r = await api.signupCreated(id, hash);
+      onStage(r.stage);
+    } catch (e) {
+      setError(explain(e));
+      setStep(undefined);
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gap: "1rem" }}>
+      <p>
+        You're verified. Now create your wallet from MetaMask: it belongs to your MetaMask account from the first block, and
+        only that account can ever take money out. Tab never holds a key to it.
+      </p>
+      <div>
+        <button className="btn" onClick={create} disabled={!!step}>
+          Connect MetaMask & create your wallet
+        </button>
+      </div>
+      <p className="muted" style={{ fontSize: "var(--t-sm)" }}>
+        Two MetaMask prompts: a free signature, then the transaction that creates the wallet (about two cents of ETH on Base).
+      </p>
+      {step && <div className="notice">{step}</div>}
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
 
 export default function Start() {
-  const navigate = useNavigate();
-  const qc = useQueryClient();
-  const t = useNow();
+  const nav = useNavigate();
   const [id, setId] = useState<string>();
   const [stage, setStage] = useState<Stage>();
   const [error, setError] = useState<string>();
-  const [copied, setCopied] = useState(false);
   const started = useRef(false);
 
   const begin = () => {
     setError(undefined);
     setStage(undefined);
-    signup()
+    api
+      .signup()
       .then((r) => {
         setId(r.id);
         setStage(r.stage);
       })
-      .catch((e: Error) => setError(e.message));
+      .catch((e) => setError(e.message));
   };
 
-  // already signed in? straight to the dashboard
+  const advance = (s: Stage) => {
+    setStage(s);
+    if (s.stage === "ready") setTimeout(() => nav("/app", { replace: true }), s.returning ? 400 : 1200);
+  };
+
   useEffect(() => {
-    loadMe().then((s) => {
-      if (s.kind === "signed_in") navigate("/dashboard", { replace: true });
-      else if (s.kind === "sample") setError("Tab isn't answering. Start it with cargo run -p tab, then try again.");
-      else if (!started.current) {
+    // already signed in? straight to the dashboard
+    api.me().then(() => nav("/app", { replace: true })).catch(() => {
+      if (!started.current) {
         started.current = true;
         begin();
       }
@@ -46,107 +106,76 @@ export default function Start() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // only World ID moves on its own; every later step is the person's
   useEffect(() => {
-    if (!id || !stage || stage.stage === "ready" || stage.stage === "failed") return;
-    const timer = setTimeout(() => {
-      signupPoll(id)
-        .then((r) => {
-          setStage(r.stage);
-          if (r.stage.stage === "ready") {
-            qc.invalidateQueries({ queryKey: ["me"] });
-            setTimeout(() => navigate("/dashboard", { replace: true }), r.stage.returning ? 400 : 1200);
-          }
-        })
-        .catch((e: Error) => setError(e.message));
+    if (!id || stage?.stage !== "verifying") return;
+    const t = setTimeout(() => {
+      api
+        .signupPoll(id)
+        .then((r) => advance(r.stage))
+        .catch((e) => setError(e.message));
     }, 2000);
-    return () => clearTimeout(timer);
-  }, [id, stage, navigate, qc]);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, stage]);
 
-  const current = stage?.stage === "creating" ? Math.max(1, STEPS.indexOf(stage.step)) : stage?.stage === "ready" ? STEPS.length : 0;
-  const failed = stage?.stage === "failed" ? stage.reason : error;
-
-  const copy = async (code: string) => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1600);
-    } catch {
-      /* still selectable */
-    }
-  };
+  const current =
+    stage?.stage === "create_wallet"
+      ? 1
+      : stage?.stage === "creating"
+        ? stage.step.startsWith("tying") ? 2 : 1
+        : stage?.stage === "ready"
+          ? STEPS.length
+          : 0;
 
   return (
-    <div className="ground grain flex min-h-dvh flex-col">
-      <header className="mx-auto flex w-full max-w-[30rem] items-center gap-r3 px-r4 pt-r4">
-        <Link to="/" className="-m-r2 flex items-center gap-r3 rounded-lg p-r2 transition-opacity duration-150 hover:opacity-85 active:opacity-70">
-          <Mark className="size-7" />
-          <span className="display text-[1.2rem] leading-none">Izanagi</span>
-        </Link>
+    <>
+      <header className="wrap bar">
+        <Brand />
       </header>
-
-      <main className="mx-auto w-full max-w-[30rem] flex-1 px-r4 pb-r6 pt-r5">
-        <h1 className="display text-[2.4rem]">Sign in with World ID</h1>
-        <p className="mt-r2 text-[0.95rem] text-sumi-soft">
-          One person gets one wallet. World ID checks you're a real, unique person; Izanagi never learns who you are.
-        </p>
-
-        <div aria-live="polite" className="mt-r5">
-          {failed ? (
-            <section className="rounded-[1.25rem] bg-beni-wash p-r5 ring-1 ring-beni/25">
-              <p className="font-semibold text-beni-deep">Signing in didn't finish</p>
-              <p className="mt-r2 text-sumi-soft">{failed}</p>
-              <button type="button" className="btn btn-quiet mt-r4" onClick={begin}>
+      <main className="wrap" style={{ display: "grid", gap: "2.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", padding: "2rem var(--gutter) 4rem", alignItems: "start" }}>
+        <div style={{ display: "grid", gap: "1.2rem" }}>
+          <h1 style={{ fontSize: "var(--t-2xl)" }}>Get your Tab</h1>
+          {error && (
+            <div className="error">
+              {error}{" "}
+              <button className="linkish" onClick={begin}>
+                Start again
+              </button>
+            </div>
+          )}
+          {!stage && !error && <p className="muted">Asking World ID for a verification…</p>}
+          {stage?.stage === "verifying" && <Verifying stage={stage} />}
+          {stage?.stage === "create_wallet" && id && <CreateWallet id={id} stage={stage} onStage={advance} />}
+          {stage?.stage === "creating" && <p>Your wallet is on Base. {stage.step[0].toUpperCase() + stage.step.slice(1)}…</p>}
+          {stage?.stage === "ready" && <p>{stage.returning ? "Welcome back. Opening your Tab." : "Your Tab is ready. Opening it."}</p>}
+          {stage?.stage === "failed" && (
+            <div className="error">
+              {stage.reason}{" "}
+              <button className="linkish" onClick={begin}>
                 Try again
               </button>
-            </section>
-          ) : stage?.stage === "verifying" ? (
-            <section className="surface-float rounded-[1.25rem] p-r4">
-              <div className="flex flex-wrap items-center gap-r4">
-                <Qr value={stage.world_url} label="QR code that opens World App to verify" />
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold">Scan with your phone</p>
-                  <p className="mt-r1 text-[0.9rem] text-sumi-soft">Or open the link on the phone that has World App.</p>
-                  <a href={stage.world_url} target="_blank" rel="noreferrer" className="btn btn-primary mt-r3 w-full">
-                    Open World App
-                  </a>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => copy(stage.user_code)}
-                className="group mt-r4 flex w-full items-center justify-between rounded-xl bg-mist-deep px-r4 py-r3 transition-transform duration-200 ease-[var(--ease-spring)] hover:-translate-y-px active:translate-y-px"
-              >
-                <span className="text-[0.85rem] text-stone">Code, if asked</span>
-                <span className="hex text-[1.3rem] font-medium tracking-[0.14em] text-sumi">{stage.user_code}</span>
-                <span className="text-[0.85rem] text-stone group-hover:text-sumi">{copied ? "Copied" : "Copy"}</span>
-              </button>
-              <p className="num mt-r3 text-[0.85rem] text-stone">Expires in {clock(stage.expires_at - t)}. Waiting for you.</p>
-            </section>
-          ) : !stage ? (
-            <p className="text-stone">Asking World ID for a code…</p>
-          ) : null}
-
-          {(stage?.stage === "creating" || stage?.stage === "ready") && (
-            <ol className="surface-raised flex flex-col gap-r3 rounded-[1.25rem] p-r4">
-              {LABELS.map((label, i) => (
-                <li key={label} className="grid grid-cols-[1.75rem_1fr] items-center gap-r3">
-                  <span
-                    className={`num flex size-7 items-center justify-center rounded-full text-[0.85rem] font-semibold ${
-                      i < current ? "bg-tide text-paper" : i === current ? "bg-sumi text-paper" : "bg-mist-deep text-stone"
-                    }`}
-                  >
-                    {i + 1}
-                  </span>
-                  <span className={i <= current ? "text-sumi" : "text-stone"}>{label}</span>
-                </li>
-              ))}
-              <li className="mt-r1 text-[0.9rem] text-sumi-soft">
-                {stage.stage === "ready" ? (stage.returning ? "Welcome back. Opening your tabs." : "Your wallet is ready. Opening your tabs.") : "This takes a few seconds."}
-              </li>
-            </ol>
+            </div>
           )}
         </div>
+
+        <div className="receipt" style={{ maxWidth: 420 }}>
+          <div className="head">New Tab</div>
+          <div className="sub">one per person</div>
+          <hr />
+          {STEPS.map((s, i) => (
+            <div key={s} className={`line ${i < current ? "settled" : i === current ? "open" : ""}`}>
+              <span className="what">{s}</span>
+              <span className="amt">{i < current ? "done" : i === current && stage?.stage !== "failed" ? "…" : ""}</span>
+            </div>
+          ))}
+          <hr />
+          <div className="line total">
+            <span className="what">Owner</span>
+            <span className="amt">you</span>
+          </div>
+        </div>
       </main>
-    </div>
+    </>
   );
 }
