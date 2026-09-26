@@ -25,7 +25,7 @@ use rmcp::{schemars, tool, tool_handler, tool_router, ErrorData as McpError, Pee
 use serde::Deserialize;
 use std::time::Duration;
 
-const INSTRUCTIONS: &str = "Tab lets you pay x402 APIs from the user's own Tab, a spending account on Base. Every payment \
+const INSTRUCTIONS: &str = "Izanagi lets you pay x402 APIs from the user's own Izanagi account, a spending account on Base. Every payment \
 is checked first: the seller is screened for fraud, the amount is held to the user's limits, and anything bigger needs \
 the user's approval through World ID. Payments stay stoppable until the seller collects. Use find_services to discover paid APIs, buy to call one. \
 When buy or wait_for_approval returns an approval link, show that link and code to the user exactly as written, then \
@@ -106,7 +106,7 @@ impl TabMcp {
             .store
             .account_by_mcp_token(&token)
             .await
-            .ok_or_else(|| McpError::invalid_request("unknown Tab link: copy yours from your Tab dashboard", None))
+            .ok_or_else(|| McpError::invalid_request("unknown Izanagi link: copy yours from your Izanagi dashboard", None))
     }
 
     fn render(&self, o: &Outcome) -> String {
@@ -185,7 +185,7 @@ impl TabMcp {
 
 #[tool_router]
 impl TabMcp {
-    #[tool(description = "List paid APIs this Tab can buy from (x402 batch-settlement sellers on Base), with price per call. Curated, proven entries first.")]
+    #[tool(description = "List paid APIs this account can buy from (x402 batch-settlement sellers on Base), with price per call. Curated, proven entries first.")]
     async fn find_services(
         &self,
         Parameters(args): Parameters<FindArgs>,
@@ -236,11 +236,11 @@ impl TabMcp {
                 v["toxicScore"], v["band"], v["reason"].as_str().unwrap_or(""),
                 v["thresholds"]["capAt"], v["thresholds"]["capAt"], v["thresholds"]["askAt"], v["thresholds"]["refuseAt"]
             )),
-            Err(e) => text(format!("Screening is unavailable right now ({e:#}), so Tab would refuse to pay anyone.")),
+            Err(e) => text(format!("Screening is unavailable right now ({e:#}), so Izanagi would refuse to pay anyone.")),
         }
     }
 
-    #[tool(description = "Pay for one call to an x402 API from the user's Tab and return the response. Screens the seller first; may need the user's approval (then shows a link).")]
+    #[tool(description = "Pay for one call to an x402 API from the user's Izanagi account and return the response. Screens the seller first; may need the user's approval (then shows a link).")]
     async fn buy(
         &self,
         Parameters(args): Parameters<BuyArgs>,
@@ -254,7 +254,7 @@ impl TabMcp {
             // a real prompt in the client, where it supports one; otherwise the link below
             if let Ok(url) = url::Url::parse(&n.approval_url) {
                 let msg = format!(
-                    "Your assistant wants to raise its Tab with {} to {}. {}",
+                    "Your assistant wants to raise its tab with {} to {}. {}",
                     n.service.clone().unwrap_or_else(|| format!("{:#x}", n.seller)),
                     usdc(n.limit),
                     n.reason
@@ -339,7 +339,7 @@ impl TabMcp {
 impl ServerHandler for TabMcp {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("tab", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new("izanagi", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
     }
 }

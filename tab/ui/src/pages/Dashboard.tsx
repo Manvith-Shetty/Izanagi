@@ -265,7 +265,7 @@ export default function Dashboard() {
   }, [refresh]);
 
   if (error) return <main className="wrap" style={{ padding: "3rem var(--gutter)" }}><div className="error">{error}</div></main>;
-  if (!me) return <main className="wrap" style={{ padding: "3rem var(--gutter)" }}><p className="muted">Opening your Tab…</p></main>;
+  if (!me) return <main className="wrap" style={{ padding: "3rem var(--gutter)" }}><p className="muted">Opening your account…</p></main>;
 
   const name = (seller: string) =>
     me.tabs.find((t) => t.seller.toLowerCase() === seller.toLowerCase())?.service ?? short(seller);
@@ -350,13 +350,13 @@ export default function Dashboard() {
           <div className="panel">
             <h3>Connect your AI</h3>
             <p className="muted" style={{ fontSize: "var(--t-sm)", marginBottom: "0.8rem" }}>
-              This link is yours alone: anyone with it can spend from this Tab, within your limits.
+              This link is yours alone: anyone with it can spend from this account, within your limits.
             </p>
-            <CopyField value={me.mcpUrl} label="Your Tab link" />
+            <CopyField value={me.mcpUrl} label="Your Izanagi link" />
             <p style={{ fontSize: "var(--t-sm)", margin: "0.9rem 0 0.4rem" }}>In Claude Code:</p>
             <CopyField value={`claude mcp add --transport http tab ${me.mcpUrl}`} label="Claude Code command" />
             <p className="muted" style={{ fontSize: "var(--t-sm)", marginTop: "0.8rem" }}>
-              In Claude's settings, add it as a custom connector. Then ask: "Use Tab to get the latest Bitcoin price."
+              In Claude's settings, add it as a custom connector. Then ask: "Use Izanagi to get the latest Bitcoin price."
             </p>
           </div>
 

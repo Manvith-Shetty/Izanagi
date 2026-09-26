@@ -188,6 +188,22 @@ the payer's Countersign wallet revoked this seller at 1790424567 (reason: wallet
 - after we had served the requests
 ```
 
+#### Feedback on the Intercepta API
+
+1. **`/analysis/signature` scores a stringified `message` as Low without saying so.** It only
+   scores typed data sent as a JSON object. A string should get a 400 error, not a clean score.
+2. **There is no way to learn that a score changed.** Our re-screening loop has to poll every open
+   tab. A webhook or subscription for addresses we watch would turn a polling loop into instant
+   revocation.
+3. **There is no batch endpoint.** Re-screening N open tabs costs N quick-scans per round, so rate
+   limits end up deciding how fast we can revoke.
+4. **The data covers mainnet only.** That suited us, since we run on Base mainnet. Teams paying on
+   a testnet have to screen a mainnet address in its place. An explicit "network not covered"
+   answer would make that impossible to get wrong.
+5. **What worked well:** a request with a wrong or missing key gets a clear 403, so we could check
+   that every endpoint path was real before we had a key. And `traits[]` gave us a readable reason
+   to show a person, beyond the bare score.
+
 ### World — the human gate
 
 > Full sequence diagram, trust boundaries and every unsuccessful path:
@@ -228,6 +244,21 @@ acr_values_supported           [https://world.org/oidc/acr/orb-v3]
 - **Backend-only validation.** The `id_token` signature is verified against the issuer's
   JWKS; the client secret never leaves the countersigner. The agent receives an opaque
   approval handle and a yes/no — never the OAuth `device_code`, and never the subject.
+
+#### Integration debrief: World ID for Agents
+
+- **First success:** device grant against `sandbox.auth.world.org`, `id_token` verified against
+  the JWKS, approval bound to a voucher digest.
+- **Friction:** the device grant, which is the flow a headless agent needs, exists only on the
+  sandbox. Production `id.worldcoin.org` offers only `authorization_code` and `implicit`, so a
+  production port has to send the person a login link instead of a short code.
+- **Missing docs:** the docs don't say whether a device-grant `id_token` always carries `acr`,
+  so we enforce the Orb credential only when it's there. We also found no example of binding an
+  approval to one specific action, so we bind it to the voucher digest ourselves.
+- **Top improvement:** offer the device grant in production, and let the client attach a
+  human-readable "you are approving" message (seller, amount) that World App shows on the
+  approval screen. Then the person sees exactly what they are signing for on World's own
+  screen, not only on ours.
 
 ---
 

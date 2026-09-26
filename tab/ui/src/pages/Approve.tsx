@@ -18,7 +18,7 @@ function ask(a: ApprovalView, service: string | null): { title: string; body: st
         body: "You closed this tab. If you approve, your AI can pay this seller again. If you don't, nothing changes.",
       };
     default:
-      return { title: "Verify you're a person", body: "This gets you your own Tab. It checks you're a real, unique person; Tab never learns who you are." };
+      return { title: "Verify you're a person", body: "This sets up your own Izanagi account. It checks you're a real, unique person; Izanagi never learns who you are." };
   }
 }
 
@@ -58,7 +58,7 @@ export default function Approve() {
       <header className="wrap bar">
         <Brand />
         <Link to="/app" style={{ fontSize: "var(--t-sm)" }}>
-          Your Tab
+          Your account
         </Link>
       </header>
       <main className="wrap" style={{ display: "flex", justifyContent: "center", padding: "1.5rem var(--gutter) 4rem" }}>

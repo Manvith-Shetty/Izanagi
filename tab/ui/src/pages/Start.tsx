@@ -10,7 +10,7 @@ function Verifying({ stage }: { stage: Extract<Stage, { stage: "verifying" }> })
   const secs = useCountdown(stage.expires_at);
   return (
     <div style={{ display: "grid", gap: "1.2rem" }}>
-      <p>Open this on your phone and approve with World ID. It checks you're a real, unique person. Tab never learns who you are.</p>
+      <p>Open this on your phone and approve with World ID. It checks you're a real, unique person. Izanagi never learns who you are.</p>
       <div style={{ display: "flex", gap: "1.4rem", alignItems: "center", flexWrap: "wrap" }}>
         <Qr value={stage.world_url} label="QR code for the World ID link" />
         <div style={{ display: "grid", gap: "0.6rem" }}>
@@ -55,7 +55,7 @@ function CreateWallet({ id, stage, onStage }: { id: string; stage: Extract<Stage
     <div style={{ display: "grid", gap: "1rem" }}>
       <p>
         You're verified. Now create your wallet from MetaMask: it belongs to your MetaMask account from the first block, and
-        only that account can ever take money out. Tab never holds a key to it.
+        only that account can ever take money out. Izanagi never holds a key to it.
       </p>
       <div>
         <button className="btn" onClick={create} disabled={!!step}>
@@ -135,7 +135,7 @@ export default function Start() {
       </header>
       <main className="wrap" style={{ display: "grid", gap: "2.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", padding: "2rem var(--gutter) 4rem", alignItems: "start" }}>
         <div style={{ display: "grid", gap: "1.2rem" }}>
-          <h1 style={{ fontSize: "var(--t-2xl)" }}>Get your Tab</h1>
+          <h1 style={{ fontSize: "var(--t-2xl)" }}>Set up Izanagi</h1>
           {error && (
             <div className="error">
               {error}{" "}
@@ -148,7 +148,7 @@ export default function Start() {
           {stage?.stage === "verifying" && <Verifying stage={stage} />}
           {stage?.stage === "create_wallet" && id && <CreateWallet id={id} stage={stage} onStage={advance} />}
           {stage?.stage === "creating" && <p>Your wallet is on Base. {stage.step[0].toUpperCase() + stage.step.slice(1)}…</p>}
-          {stage?.stage === "ready" && <p>{stage.returning ? "Welcome back. Opening your Tab." : "Your Tab is ready. Opening it."}</p>}
+          {stage?.stage === "ready" && <p>{stage.returning ? "Welcome back. Opening your account." : "Your account is ready. Opening it."}</p>}
           {stage?.stage === "failed" && (
             <div className="error">
               {stage.reason}{" "}
@@ -160,7 +160,7 @@ export default function Start() {
         </div>
 
         <div className="receipt" style={{ maxWidth: 420 }}>
-          <div className="head">New Tab</div>
+          <div className="head">New account</div>
           <div className="sub">one per person</div>
           <hr />
           {STEPS.map((s, i) => (

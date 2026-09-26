@@ -1,4 +1,4 @@
-/* Tab — the receipt is the interface: every line is a decision.
+/* Izanagi — the receipt is the interface: every line is a decision.
    Counter-top zinc behind, thermal paper in front. Green: checked and paid. Amber: waiting on,
    or approved by, the person. Stamp red: refused, or stopped before collection. */
 
@@ -577,6 +577,216 @@ p {
   padding-bottom: 0.6rem;
 }
 
+/* ---------------------------------------------------------------- after your AI pays */
+
+h2.after-title {
+  font-size: clamp(1.75rem, 3.4vw, 2.6rem);
+  max-width: 24ch;
+}
+.nowrap {
+  white-space: nowrap;
+}
+
+/* one payment's life, left to right: signed, the gap, collected */
+.timeline {
+  --rail: 0.55rem;
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1.25fr 1fr;
+  gap: 2rem;
+  margin-top: 1rem;
+}
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  top: calc(var(--rail) - 1px);
+  height: 2px;
+  background: var(--ink);
+}
+.timeline > div {
+  position: relative;
+  display: grid;
+  gap: 0.45rem;
+  align-content: start;
+  padding-top: 2.1rem;
+}
+.tl-dot {
+  position: absolute;
+  top: calc(var(--rail) - 7px);
+  left: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+}
+.tl-stop.collected .tl-dot {
+  left: auto;
+  right: 0;
+  background: var(--stamp);
+  border-color: var(--stamp);
+  box-shadow: 0 0 0 4px rgba(196, 48, 43, 0.16);
+}
+.tl-stop.collected {
+  text-align: right;
+  justify-items: end;
+}
+/* the gap everyone else gives up on: hatched, like tape over the rail */
+.tl-track {
+  position: absolute;
+  top: calc(var(--rail) - 5px);
+  left: -1rem;
+  right: -1rem;
+  height: 10px;
+  border-radius: 5px;
+  background: repeating-linear-gradient(-45deg, var(--open) 0 5px, var(--open-wash) 5px 10px);
+}
+.tl-span p {
+  color: #2d302d;
+}
+.tl-stamp {
+  top: -1.9rem;
+  right: 1.6rem;
+  font-size: 1.25rem;
+}
+
+.ledger-wrap {
+  border-top: 2px solid var(--ink);
+}
+.ledger {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-md);
+}
+.ledger th,
+.ledger td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.9rem 1rem 0.9rem 0;
+  border-bottom: 1px dashed var(--rule);
+}
+.ledger thead th {
+  font-size: var(--t-sm);
+  font-weight: 700;
+  color: var(--faded);
+  padding-top: 0.7rem;
+}
+.ledger thead th:last-child {
+  color: var(--ok);
+}
+.ledger tbody th {
+  font-weight: 750;
+  width: 28%;
+}
+.ledger td.them {
+  color: var(--faded);
+  width: 30%;
+}
+.ledger td.us {
+  color: var(--ink);
+  font-weight: 600;
+  padding-left: 1rem;
+  border-left: 3px solid var(--ok);
+}
+
+.proof.stopped a:last-child {
+  color: var(--stamp);
+  font-weight: 700;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 820px) {
+  .timeline {
+    grid-template-columns: 1fr;
+    gap: 1.6rem;
+    padding-left: 2rem;
+  }
+  .timeline::before {
+    left: 6px;
+    right: auto;
+    top: 7px;
+    bottom: 7px;
+    width: 2px;
+    height: auto;
+  }
+  .timeline > div {
+    padding-top: 0;
+  }
+  .tl-dot,
+  .tl-stop.collected .tl-dot {
+    top: 0.2rem;
+    left: calc(-2rem - 0px);
+    right: auto;
+  }
+  .tl-stop.collected {
+    text-align: left;
+    justify-items: start;
+  }
+  .tl-track {
+    top: -0.8rem;
+    bottom: -0.8rem;
+    left: calc(-2rem + 2px);
+    right: auto;
+    width: 10px;
+    height: auto;
+    background: repeating-linear-gradient(45deg, var(--open) 0 5px, var(--open-wash) 5px 10px);
+  }
+  .tl-stamp {
+    position: relative;
+    top: auto;
+    right: auto;
+    justify-self: start;
+    margin: 0.5rem 0 0 0.3rem;
+  }
+}
+
+@media (max-width: 720px) {
+  .ledger thead {
+    display: none;
+  }
+  .ledger,
+  .ledger tbody,
+  .ledger tr,
+  .ledger th,
+  .ledger td {
+    display: block;
+    width: auto !important;
+  }
+  .ledger tr {
+    padding: 0.9rem 0;
+    border-bottom: 1px dashed var(--rule);
+  }
+  .ledger th,
+  .ledger td {
+    border-bottom: 0;
+    padding: 0.2rem 0;
+  }
+  .ledger td.us {
+    padding-left: 0.8rem;
+    margin-top: 0.4rem;
+  }
+  .ledger td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: var(--t-xs);
+    font-weight: 700;
+    color: var(--faded);
+  }
+  .ledger td.us::before {
+    color: var(--ok);
+  }
+}
+
 /* ---------------------------------------------------------------- site chrome */
 
 .bar {
@@ -599,32 +809,34 @@ p {
   align-items: center;
   gap: 0.5rem;
 }
+/* a torii: two posts under a lintel and a tie beam */
 .brand .mark {
   width: 26px;
   height: 26px;
-  background: var(--ink);
   border-radius: 6px;
   position: relative;
+  background: linear-gradient(var(--paper), var(--paper)) 50% 11px / 14px 2px no-repeat, var(--ink);
 }
 .brand .mark::before {
   content: "";
   position: absolute;
-  left: 6px;
-  right: 6px;
-  top: 7px;
+  left: 4px;
+  right: 4px;
+  top: 6px;
   height: 3px;
   background: var(--paper);
-  border-radius: 2px;
+  border-radius: 2px 2px 1px 1px;
 }
 .brand .mark::after {
   content: "";
   position: absolute;
-  left: 11.5px;
-  top: 7px;
+  left: 8px;
+  top: 8px;
   width: 3px;
   height: 13px;
   background: var(--paper);
-  border-radius: 2px;
+  border-radius: 1px;
+  box-shadow: 7px 0 0 var(--paper);
 }
 .bar nav {
   display: flex;

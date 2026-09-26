@@ -4,9 +4,9 @@ import QRCode from "qrcode";
 
 export function Brand() {
   return (
-    <Link to="/" className="brand" aria-label="Tab home">
+    <Link to="/" className="brand" aria-label="Izanagi home">
       <span className="mark" aria-hidden="true" />
-      Tab
+      Izanagi
     </Link>
   );
 }
