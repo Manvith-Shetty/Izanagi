@@ -39,6 +39,14 @@ pub struct ApprovalView {
     pub tx: Option<String>,
 }
 
+/// What a verified enrolment yields: a stable, private fingerprint of the person, and a
+/// one-time grant to bind a wallet to them. Never the person's identity.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Enrolled {
+    pub human: String,
+    pub grant: String,
+}
+
 impl ApprovalView {
     /// World's own page, with the code pre-filled when World offers that.
     pub fn world_link(&self) -> &str {
@@ -114,6 +122,28 @@ impl Brain {
         let body = json!({"wallet": wallet, "seller": seller});
         let (s, b) = self.send(self.http.post(format!("{}/v1/restore", self.base)).json(&body)).await?;
         Self::ok(s, b)
+    }
+
+    /// Start "prove you are a unique human" for someone who wants a Tab.
+    pub async fn enroll(&self) -> Result<ApprovalView> {
+        let (s, b) = self.send(self.http.post(format!("{}/v1/enroll", self.base))).await?;
+        Ok(serde_json::from_value(Self::ok(s, b)?).context("decoding an enrolment")?)
+    }
+
+    /// Redeem an approved enrolment. `None` while the person has not finished verifying.
+    pub async fn claim_enrollment(&self, id: &str) -> Result<Option<Enrolled>> {
+        let (s, b) = self.send(self.http.post(format!("{}/v1/enroll/{id}/claim", self.base))).await?;
+        if s == StatusCode::ACCEPTED {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_value(Self::ok(s, b)?).context("decoding a claimed enrolment")?))
+    }
+
+    /// Tie a freshly deployed wallet to the person an enrolment verified.
+    pub async fn bind(&self, grant: &str, wallet: Address) -> Result<()> {
+        let body = json!({"grant": grant, "wallet": wallet});
+        let (s, b) = self.send(self.http.post(format!("{}/v1/bind", self.base)).json(&body)).await?;
+        Self::ok(s, b).map(|_| ())
     }
 
     pub async fn activity(&self, after: u64) -> Result<Vec<Value>> {

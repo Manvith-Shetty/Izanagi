@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["countersigner", "agent", "seller", "common"]
-# `tab/` (the product server) is being built and joins the workspace when it compiles
+members = ["countersigner", "agent", "seller", "common", "tab"]
 
 [workspace.package]
 version = "0.1.0"

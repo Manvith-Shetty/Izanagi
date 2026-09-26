@@ -20,11 +20,16 @@ pub struct TabEnv {
     /// The agent's hot key. Signs vouchers (useless without a countersignature) and pays the
     /// gas to open tabs from the wallet's pre-approved allowance.
     pub agent_private_key: String,
-    /// The Countersign wallet every tab is paid from.
-    pub wallet: Address,
-    /// The wallet's deposit collector. With it, Tab opens tabs itself, within the allowance
-    /// the owner granted; without it, tabs must be opened by the owner.
-    pub collector: Option<Address>,
+    /// Deploys each person's Countersign wallet, owns it, and funds their trial. In the product
+    /// people bring their own owner; for the free trial, Tab's treasury holds that role.
+    pub treasury_key: String,
+    /// The shared deposit collector every wallet approves (it only moves a wallet's own funds
+    /// into that wallet's own channels).
+    pub collector: Address,
+    /// USDC each new person's wallet starts with, atomic (6 decimals).
+    pub trial_amount: u128,
+    /// Stop creating trial wallets after this many, whatever happens.
+    pub trial_max_accounts: usize,
     pub chain_id: u64,
     pub rpc: String,
     /// Mainnet data for the network census, even when payments run on a fork.
@@ -34,34 +39,31 @@ pub struct TabEnv {
     pub tab_deposit: u128,
     /// The most this agent will pay for a single call, whatever the seller asks.
     pub max_price: u128,
-    /// Bearer token for the dashboard's buttons. Unset => the dashboard is read-only.
-    pub admin_token: Option<String>,
-    /// Secret for the MCP endpoint (`/mcp/{token}` or `Authorization: Bearer`). Unset => the
-    /// MCP server is open to anyone who can reach it, which spends real money: only for local use.
-    pub mcp_token: Option<String>,
     pub web_dir: PathBuf,
     pub state_dir: PathBuf,
+    /// Our own shop for demonstrating the kill switch (the `seller` crate), if deployed.
+    pub demo_shop_url: Option<String>,
 }
 
 impl std::fmt::Debug for TabEnv {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let set = |o: &Option<String>| if o.is_some() { "<redacted>" } else { "<unset>" };
         f.debug_struct("TabEnv")
             .field("bind", &self.bind)
             .field("public_url", &self.public_url)
             .field("countersigner_url", &self.countersigner_url)
             .field("control_token", &"<redacted>")
             .field("agent_private_key", &"<redacted>")
-            .field("wallet", &self.wallet)
+            .field("treasury_key", &"<redacted>")
             .field("collector", &self.collector)
+            .field("trial_amount", &self.trial_amount)
+            .field("trial_max_accounts", &self.trial_max_accounts)
             .field("chain_id", &self.chain_id)
             .field("rpc", &self.rpc)
             .field("tab_deposit", &self.tab_deposit)
             .field("max_price", &self.max_price)
-            .field("admin_token", &set(&self.admin_token))
-            .field("mcp_token", &set(&self.mcp_token))
             .field("web_dir", &self.web_dir)
             .field("state_dir", &self.state_dir)
+            .field("demo_shop_url", &self.demo_shop_url)
             .finish()
     }
 }
@@ -100,22 +102,23 @@ impl TabEnv {
                 .to_string(),
             control_token: secret("CONTROL_TOKEN")?.ok_or("CONTROL_TOKEN env not found: Tab needs the countersigner's operator token")?,
             agent_private_key: get_from_env_unsafe("AGENT_PRIVATE_KEY")?,
-            wallet: get_from_env_unsafe("COUNTERSIGN_WALLET")?,
-            collector,
+            treasury_key: get_from_env_unsafe("TAB_TREASURY_KEY")?,
+            collector: collector.ok_or("COUNTERSIGN_COLLECTOR env not found: every wallet approves one shared collector")?,
+            trial_amount: get_from_env_unsafe("TAB_TRIAL_AMOUNT").unwrap_or(250_000), // 0.25 USDC
+            trial_max_accounts: get_from_env_unsafe("TAB_TRIAL_MAX_ACCOUNTS").unwrap_or(40),
             chain_id: get_from_env_unsafe("CHAIN_ID").unwrap_or(8453),
             census_rpc: non_empty("CENSUS_RPC").unwrap_or_else(|| "https://mainnet.base.org".into()),
             rpc,
             blockscout_api: non_empty("BLOCKSCOUT_API").unwrap_or_else(|| "https://base.blockscout.com/api".into()),
-            tab_deposit: get_from_env_unsafe("TAB_DEPOSIT").unwrap_or(1_000_000), // 1 USDC
+            tab_deposit: get_from_env_unsafe("TAB_DEPOSIT").unwrap_or(50_000), // 0.05 USDC per shop
             max_price: get_from_env_unsafe("TAB_MAX_PRICE").unwrap_or(100_000), // 0.10 USDC a call
-            admin_token: secret("TAB_ADMIN_TOKEN")?,
-            mcp_token: secret("TAB_MCP_TOKEN")?,
             web_dir: non_empty("TAB_WEB_DIR")
                 .map(Into::into)
                 .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/web/dist").into()),
             state_dir: non_empty("TAB_STATE_DIR")
                 .map(Into::into)
                 .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/.state").into()),
+            demo_shop_url: non_empty("DEMO_SHOP_URL").map(|u| u.trim_end_matches('/').to_string()),
         })
     }
 
@@ -124,12 +127,9 @@ impl TabEnv {
         self.rpc.contains("127.0.0.1") || self.rpc.contains("localhost")
     }
 
-    /// The address an MCP client should be given.
-    pub fn mcp_url(&self) -> String {
-        match &self.mcp_token {
-            Some(t) => format!("{}/mcp/{t}", self.public_url),
-            None => format!("{}/mcp", self.public_url),
-        }
+    /// The address a person's MCP client should be given. The token is theirs alone.
+    pub fn mcp_url(&self, token: &str) -> String {
+        format!("{}/mcp/{token}", self.public_url)
     }
 }
 
@@ -143,8 +143,9 @@ mod tests {
     fn required() {
         std::env::set_var("CONTROL_TOKEN", "a-long-enough-control-token");
         std::env::set_var("AGENT_PRIVATE_KEY", "0x2");
-        std::env::set_var("COUNTERSIGN_WALLET", "0x1111111111111111111111111111111111111111");
-        for k in ["TAB_PUBLIC_URL", "TAB_ADMIN_TOKEN", "TAB_MCP_TOKEN", "COUNTERSIGN_COLLECTOR", "TAB_BIND"] {
+        std::env::set_var("TAB_TREASURY_KEY", "0x3");
+        std::env::set_var("COUNTERSIGN_COLLECTOR", "0x1111111111111111111111111111111111111111");
+        for k in ["TAB_PUBLIC_URL", "TAB_BIND"] {
             std::env::remove_var(k);
         }
     }
@@ -153,33 +154,36 @@ mod tests {
     fn required_keys_are_named_when_missing() {
         let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
         required();
-        std::env::remove_var("COUNTERSIGN_WALLET");
-        assert!(TabEnv::new().unwrap_err().contains("COUNTERSIGN_WALLET"));
+        std::env::remove_var("TAB_TREASURY_KEY");
+        assert!(TabEnv::new().unwrap_err().contains("TAB_TREASURY_KEY"));
+        required();
+        std::env::remove_var("COUNTERSIGN_COLLECTOR");
+        assert!(TabEnv::new().unwrap_err().contains("COUNTERSIGN_COLLECTOR"));
         required();
         std::env::remove_var("CONTROL_TOKEN");
         assert!(TabEnv::new().unwrap_err().contains("CONTROL_TOKEN"));
     }
 
     #[test]
-    fn short_secrets_are_refused_by_name() {
+    fn a_short_control_token_is_refused_by_name() {
         let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
         required();
-        std::env::set_var("TAB_MCP_TOKEN", "short");
-        assert!(TabEnv::new().unwrap_err().contains("TAB_MCP_TOKEN"));
-        std::env::remove_var("TAB_MCP_TOKEN");
+        std::env::set_var("CONTROL_TOKEN", "short");
+        assert!(TabEnv::new().unwrap_err().contains("CONTROL_TOKEN"));
+        required();
     }
 
     #[test]
-    fn the_mcp_url_carries_its_secret_and_debug_does_not() {
+    fn the_mcp_url_carries_a_persons_token_and_debug_hides_keys() {
         let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
         required();
         std::env::set_var("TAB_PUBLIC_URL", "https://tab.example/");
-        std::env::set_var("TAB_MCP_TOKEN", "mcp-secret-0123456789");
+        std::env::set_var("TAB_TREASURY_KEY", "0xtreasury-secret");
         let e = TabEnv::new().unwrap();
-        assert_eq!(e.mcp_url(), "https://tab.example/mcp/mcp-secret-0123456789");
+        assert_eq!(e.mcp_url("tok_123"), "https://tab.example/mcp/tok_123");
         let d = format!("{e:?}");
-        assert!(!d.contains("mcp-secret") && !d.contains("a-long-enough-control-token"), "{d}");
-        std::env::remove_var("TAB_MCP_TOKEN");
+        assert!(!d.contains("treasury-secret") && !d.contains("a-long-enough-control-token"), "{d}");
         std::env::remove_var("TAB_PUBLIC_URL");
+        required();
     }
 }
