@@ -1,0 +1,616 @@
+/* Tab — the receipt is the interface: every line is a decision.
+   Counter-top zinc behind, thermal paper in front. Green: checked and paid. Amber: waiting on,
+   or approved by, the person. Stamp red: refused, or stopped before collection. */
+
+:root {
+  --counter: #c9cfc8;
+  --counter-deep: #b3bab2;
+  --paper: #fcfcfa;
+  --ink: #1e211f;
+  --faded: #6f746f;
+  --rule: #d8dbd6;
+  --stamp: #c4302b;
+  --open: #b7791f;
+  --open-wash: #f6ead2;
+  --ok: #2f6b4f;
+
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* a minor-third scale from a 16px body */
+  --t-xs: 0.75rem;
+  --t-sm: 0.875rem;
+  --t-md: 1rem;
+  --t-lg: 1.25rem;
+  --t-xl: 1.75rem;
+  --t-2xl: 2.75rem;
+  --t-3xl: clamp(2.6rem, 6.2vw, 4.75rem);
+
+  --gutter: clamp(16px, 4vw, 48px);
+  --measure: 34rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--counter);
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--display);
+  font-stretch: 115%;
+  font-variation-settings: "wdth" 115;
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+h1 {
+  font-size: var(--t-3xl);
+  font-weight: 850;
+}
+/* the landing headline is a sentence, not a slogan: smaller ceiling, so it sets in 3 lines */
+h1.hero-title {
+  font-size: clamp(2.3rem, 4.6vw, 3.6rem);
+  line-height: 1.04;
+}
+h2 {
+  font-size: var(--t-xl);
+  font-weight: 800;
+}
+h3 {
+  font-size: var(--t-lg);
+  font-weight: 750;
+}
+p {
+  margin: 0;
+  max-width: var(--measure);
+}
+.lede {
+  font-size: var(--t-lg);
+  line-height: 1.45;
+  color: #2d302d;
+}
+.muted {
+  color: var(--faded);
+}
+.mono {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  letter-spacing: -0.01em;
+}
+.wrap {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+/* ---------------------------------------------------------------- buttons */
+
+.btn {
+  appearance: none;
+  border: 2px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font: 700 var(--t-md) / 1 var(--display);
+  font-variation-settings: "wdth" 108;
+  padding: 0.85rem 1.25rem;
+  border-radius: 999px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: transform 120ms ease, background 120ms ease;
+}
+.btn:hover {
+  transform: translateY(-1px);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+  transform: none;
+}
+.btn.ghost {
+  background: transparent;
+  color: var(--ink);
+}
+.btn.stop {
+  background: var(--stamp);
+  border-color: var(--stamp);
+}
+.btn.small {
+  font-size: var(--t-sm);
+  padding: 0.55rem 0.9rem;
+}
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- the receipt */
+
+.receipt {
+  --tooth: 9px;
+  position: relative;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  line-height: 1.55;
+  padding: 1.5rem 1.4rem 1.9rem;
+  filter: drop-shadow(0 1px 0 rgba(30, 33, 31, 0.08)) drop-shadow(0 14px 22px rgba(30, 33, 31, 0.14));
+  /* torn thermal-paper edge, top and bottom */
+  -webkit-mask:
+    conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / calc(var(--tooth) * 2) var(--tooth) repeat-x,
+    conic-gradient(from 135deg at top, #0000, #000 1deg 89deg, #0000 90deg) top / calc(var(--tooth) * 2) var(--tooth) repeat-x,
+    linear-gradient(#000 0 0) center / 100% calc(100% - var(--tooth) * 2) no-repeat;
+  mask:
+    conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / calc(var(--tooth) * 2) var(--tooth) repeat-x,
+    conic-gradient(from 135deg at top, #0000, #000 1deg 89deg, #0000 90deg) top / calc(var(--tooth) * 2) var(--tooth) repeat-x,
+    linear-gradient(#000 0 0) center / 100% calc(100% - var(--tooth) * 2) no-repeat;
+}
+.receipt .head {
+  font-family: var(--display);
+  font-variation-settings: "wdth" 120;
+  font-weight: 800;
+  font-size: var(--t-lg);
+  letter-spacing: -0.01em;
+  margin-bottom: 0.15rem;
+}
+.receipt .sub {
+  color: var(--faded);
+  font-size: var(--t-xs);
+  word-break: break-all;
+}
+.receipt hr {
+  border: 0;
+  border-top: 1px dashed #b9bdb8;
+  margin: 0.8rem 0;
+}
+.line {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1rem;
+  align-items: baseline;
+  position: relative;
+  padding: 0.12rem 0.3rem;
+  margin: 0 -0.3rem;
+  border-radius: 2px;
+}
+.line .what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.line .amt {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.line.open {
+  background: var(--open-wash);
+}
+.line.open .amt::after {
+  content: " ◐";
+  color: var(--open);
+}
+.line.settled {
+  color: var(--faded);
+}
+.line.junk .what {
+  text-decoration: line-through;
+  text-decoration-color: var(--stamp);
+}
+/* refused or stopped: the money never moved */
+.line.void .amt {
+  text-decoration: line-through;
+  text-decoration-color: var(--stamp);
+  color: var(--faded);
+}
+.decision {
+  font-weight: 700;
+}
+.decision.paid {
+  color: var(--ok);
+}
+.decision.approved {
+  color: var(--open);
+}
+.decision.refused,
+.decision.stopped {
+  color: var(--stamp);
+}
+.line .note {
+  display: block;
+  font-size: var(--t-xs);
+  color: var(--faded);
+}
+.total {
+  font-weight: 700;
+}
+
+/* the stamp: a physical object, so it may shout */
+.stamp {
+  position: absolute;
+  pointer-events: none;
+  font-family: var(--display);
+  font-variation-settings: "wdth" 125;
+  font-weight: 900;
+  font-size: 1.55rem;
+  letter-spacing: 0.08em;
+  color: var(--stamp);
+  border: 3px solid var(--stamp);
+  border-radius: 6px;
+  padding: 0.05rem 0.6rem;
+  transform: rotate(-9deg);
+  mix-blend-mode: multiply;
+  opacity: 0.88;
+  background: repeating-linear-gradient(
+      90deg,
+      transparent 0 3px,
+      rgba(252, 252, 250, 0.35) 3px 4px
+    );
+}
+.stamp.ok {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.stamp.slam {
+  animation: slam 380ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+@keyframes slam {
+  0% {
+    transform: rotate(-16deg) scale(2.1);
+    opacity: 0;
+  }
+  60% {
+    transform: rotate(-8deg) scale(0.96);
+    opacity: 0.95;
+  }
+  100% {
+    transform: rotate(-9deg) scale(1);
+    opacity: 0.88;
+  }
+}
+
+/* receipt lines printing one by one (landing page only) */
+.printing .line,
+.printing .reveal {
+  animation: print 260ms steps(4, end) both;
+}
+@keyframes print {
+  from {
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .printing .line,
+  .printing .reveal,
+  .stamp.slam {
+    animation: none;
+  }
+  .btn {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------- panels */
+
+.panel {
+  background: var(--paper);
+  border-radius: 10px;
+  padding: 1.25rem 1.3rem;
+  box-shadow: 0 1px 0 rgba(30, 33, 31, 0.06);
+}
+.panel h3 {
+  margin-bottom: 0.6rem;
+}
+.side > * + * {
+  margin-top: 16px;
+}
+
+/* a ticket stub: the one other paper shape, used for the wallet */
+.stub {
+  position: relative;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 10px;
+  padding: 1.25rem 1.3rem;
+}
+.stub::before,
+.stub::after {
+  content: "";
+  position: absolute;
+  top: 58%;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--counter);
+}
+.stub::before {
+  left: -9px;
+}
+.stub::after {
+  right: -9px;
+}
+.stub .big {
+  font-family: var(--mono);
+  font-size: var(--t-2xl);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.stub .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: var(--t-sm);
+  padding-top: 0.35rem;
+}
+.stub .row span:first-child {
+  color: #b9beb8;
+}
+.stub .perf {
+  border-top: 2px dashed rgba(252, 252, 250, 0.25);
+  margin: 1rem -1.3rem 0.8rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--t-xs);
+  font-weight: 700;
+  font-family: var(--display);
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: #e9ebe7;
+  color: var(--ink);
+}
+.chip.open {
+  background: var(--open-wash);
+  color: #7a4f10;
+}
+.chip.closed {
+  background: #f6dcda;
+  color: #8f201c;
+}
+.chip.live::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(47, 107, 79, 0.18);
+}
+
+.copy {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+.copy code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  background: #eef0ec;
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--t-sm);
+}
+.feed li {
+  display: grid;
+  grid-template-columns: 3.2rem 1fr;
+  gap: 0.6rem;
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--rule);
+}
+.feed li:first-child {
+  border-top: 0;
+}
+.feed time {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  color: var(--faded);
+  padding-top: 0.1rem;
+}
+.feed .stop {
+  color: var(--stamp);
+  font-weight: 700;
+}
+
+.error {
+  background: #f6dcda;
+  color: #7c1c18;
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+  font-size: var(--t-sm);
+}
+.notice {
+  background: var(--open-wash);
+  border-radius: 8px;
+  padding: 0.8rem 0.95rem;
+  font-size: var(--t-sm);
+}
+
+.qr {
+  width: 164px;
+  height: 164px;
+  image-rendering: pixelated;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px;
+}
+
+.code {
+  font-family: var(--mono);
+  font-size: var(--t-xl);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+/* how it works: one ticket, torn into three parts along perforations */
+.ticket {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: var(--paper);
+  border-radius: 12px;
+}
+.ticket li {
+  display: grid;
+  gap: 0.5rem;
+  align-content: start;
+  padding: 1.5rem 1.4rem 1.7rem;
+}
+.ticket li + li {
+  border-left: 2px dashed var(--rule);
+}
+.ticket.four {
+  grid-template-columns: repeat(4, 1fr);
+}
+@media (max-width: 1060px) {
+  .ticket.four {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .ticket.four li:nth-child(3) {
+    border-left: 0;
+  }
+  .ticket.four li:nth-child(n + 3) {
+    border-top: 2px dashed var(--rule);
+  }
+}
+@media (max-width: 820px) {
+  .ticket,
+  .ticket.four {
+    grid-template-columns: 1fr;
+  }
+  .ticket li + li {
+    border-left: 0;
+    border-top: 2px dashed var(--rule);
+  }
+}
+
+.proof {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.2rem 1.5rem;
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  border-bottom: 1px dashed var(--rule);
+  padding-bottom: 0.6rem;
+}
+
+/* ---------------------------------------------------------------- site chrome */
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  /* vertical only: the side gutter comes from .wrap */
+  padding-top: 1.1rem;
+  padding-bottom: 1.1rem;
+}
+.brand {
+  font-family: var(--display);
+  font-variation-settings: "wdth" 125;
+  font-weight: 900;
+  font-size: 1.6rem;
+  letter-spacing: -0.03em;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.brand .mark {
+  width: 26px;
+  height: 26px;
+  background: var(--ink);
+  border-radius: 6px;
+  position: relative;
+}
+.brand .mark::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 7px;
+  height: 3px;
+  background: var(--paper);
+  border-radius: 2px;
+}
+.brand .mark::after {
+  content: "";
+  position: absolute;
+  left: 11.5px;
+  top: 7px;
+  width: 3px;
+  height: 13px;
+  background: var(--paper);
+  border-radius: 2px;
+}
+.bar nav {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  font-size: var(--t-sm);
+}
+
+.footer {
+  padding: 3rem 0 2.5rem;
+  font-size: var(--t-sm);
+  color: #474b47;
+}
+
+@media (max-width: 720px) {
+  .hide-sm {
+    display: none !important;
+  }
+}

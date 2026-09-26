@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { followFeed, loadCensus, loadFeed, loadOverview } from "./api";
+import { followFeed, loadCensus, loadMe } from "./api";
+import { sampleFeed } from "./sample";
 import type { FeedItem } from "./types";
 import { now } from "./format";
 
@@ -14,44 +15,42 @@ export function useNow(): number {
   return t;
 }
 
-export function useOverview() {
-  return useQuery({ queryKey: ["overview"], queryFn: loadOverview, refetchInterval: 4000 });
+/** The signed-in person's wallet and tabs, or why there isn't one. */
+export function useMe() {
+  return useQuery({ queryKey: ["me"], queryFn: loadMe, refetchInterval: (q) => (q.state.data?.kind === "signed_in" ? 4000 : false) });
 }
 
 export function useCensus() {
   return useQuery({ queryKey: ["census"], queryFn: loadCensus, refetchInterval: 60_000 });
 }
 
-/** The merged feed: history once, then live over SSE. Newest first. */
-export function useFeed() {
+/**
+ * This person's feed, newest first. Live over SSE when signed in (Tab replays the history
+ * first); sample when Tab isn't running; empty when signed out.
+ */
+export function useFeed(mode: "live" | "sample" | "off") {
   const [items, setItems] = useState<FeedItem[]>([]);
-  const [sample, setSample] = useState(false);
   const [live, setLive] = useState(false);
   const seen = useRef(new Set<number>());
 
   useEffect(() => {
-    let stop = () => {};
-    let cancelled = false;
-    loadFeed().then((r) => {
-      if (cancelled) return;
-      r.data.forEach((i) => seen.current.add(i.id));
-      setItems([...r.data].reverse());
-      setSample(r.sample);
-      if (r.sample) return;
-      stop = followFeed(
-        (i) => {
-          if (seen.current.has(i.id)) return;
-          seen.current.add(i.id);
-          setItems((prev) => [i, ...prev].slice(0, 300));
-        },
-        setLive,
-      );
-    });
-    return () => {
-      cancelled = true;
-      stop();
-    };
-  }, []);
+    seen.current = new Set();
+    setLive(false);
+    if (mode === "sample") {
+      setItems([...sampleFeed()].reverse());
+      return;
+    }
+    setItems([]);
+    if (mode === "off") return;
+    return followFeed(
+      (i) => {
+        if (seen.current.has(i.id)) return;
+        seen.current.add(i.id);
+        setItems((prev) => [i, ...prev].slice(0, 300));
+      },
+      setLive,
+    );
+  }, [mode]);
 
-  return { items, sample, live };
+  return { items, live, sample: mode === "sample" };
 }

@@ -4,6 +4,7 @@ import Landing from "./pages/Landing";
 import Dashboard from "./pages/Dashboard";
 import Approve from "./pages/Approve";
 import Sellers from "./pages/Sellers";
+import Start from "./pages/Start";
 import { Header } from "./components/Chrome";
 
 /** Scroll to the top on a new page, or to the #section a link names. */
@@ -40,6 +41,7 @@ export default function App() {
       <ScrollManager />
       <Routes>
         <Route path="/" element={<Landing />} />
+        <Route path="/start" element={<Start />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/approve/:id" element={<Approve />} />
         <Route path="/sellers" element={<Sellers />} />

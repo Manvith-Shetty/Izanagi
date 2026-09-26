@@ -1,86 +1,92 @@
 // Shown only when the Tab server can't be reached, and always labelled as sample data.
-// The census figures are the ones measured on Base mainnet on 26 Sep 2026 (see the README).
+// The census figures are the ones Tab measured on Base mainnet on 27 Sep 2026; the sellers are the
+// real hyperextend and onesource payTo addresses, and the demo shop is ours.
 
-import type { Approval, Census, FeedItem, Overview } from "./types";
+import type { ApprovalPage, Census, FeedItem, Me } from "./types";
 import { now } from "./format";
 
 const WALLET = "0x7a3c9e1f4b2d8a6c5e0f1d3b9a7c2e4f6d8b0a1c";
-const HYPER = "0x4f2a91c07d3e5b8a6f1c2d9e0b7a3c5f8e1d4b6a";
-const ONESOURCE = "0x9b1e7c3a5d2f8e0b4a6c1d7f3e9a5b2c8d0f6e4a";
+const HYPER = "0x548fc289526ab2f0391d562a723cda64bbf1abc4";
+const ONESOURCE = "0x52e29e0d2aa49bfbfc548c0a9f2196f4aa51f3ea";
 const DEMO = "0xc81d3f5a7e9b2c4d6f8a0e1b3c5d7f9a2b4c6e8d";
 
 export const SAMPLE_CENSUS: Census = {
-  windowDays: 14,
-  channels: 379,
-  payers: 61,
-  singleKey: 379,
-  withPolicy: 0,
-  updatedAt: 0,
+  measuredAt: 1790451903,
+  channels: 1928,
+  payers: 204,
+  sellers: 153,
+  channelsLast14d: 591,
+  escrowUsdc: 56_625_177,
+  policyChannels: 3,
+  countersignPayers: 1,
 };
 
-export function sampleOverview(): Overview {
+export function sampleMe(): Me {
   const t = now();
   return {
-    wallet: WALLET,
-    owner: "0x2e8b4d6f1a3c5e7b9d0f2a4c6e8b1d3f5a7c9e0b",
-    chainId: 8453,
-    fork: false,
-    readOnly: true,
-    mcpUrl: `${location.origin}/mcp`,
-    human: "Orb-verified",
-    paused: false,
-    sessions: [
+    account: { id: "sample", wallet: WALLET, human: "Orb-verified", createdAt: t - 3600, trial: 250_000, deployTx: null, fundTx: null },
+    wallet: { usdc: 120_000, allowance: 1_000_000, paused: false, owner: "0x2e8b4d6f1a3c5e7b9d0f2a4c6e8b1d3f5a7c9e0b", riskOracle: "0xd2ba14d0bf9163a135270b562c8c7cba2685175d" },
+    totals: { spent: 45_000, stoppable: 25_000, escrowed: 105_000, saved: 3_000 },
+    tabs: [
       {
-        channel_id: "0x51c0…",
-        wallet: WALLET,
+        channelId: "0x51c0",
         seller: HYPER,
-        label: "hyperextend",
-        token: "USDC",
-        chain_id: 8453,
-        ceiling: 340_000,
-        vouchers: 17,
+        service: "hyperextend",
+        price: 2_000,
+        requests: 10,
+        charged: 20_000,
+        claimed: 0,
+        stoppable: 20_000,
+        saved: 0,
+        escrowed: 50_000,
+        deposited: 50_000,
         expiry: t + 94,
-        opened_at: t - 2400,
-        last_screened_at: t - 12,
-        last_score: 4,
-        revoked: false,
-        revoked_reason: null,
+        withdrawing: false,
+        status: "open",
+        riskScore: 4,
+        openTx: null,
       },
       {
-        channel_id: "0x88ae…",
-        wallet: WALLET,
+        channelId: "0x88ae",
         seller: ONESOURCE,
-        label: "onesource",
-        token: "USDC",
-        chain_id: 8453,
-        ceiling: 125_000,
-        vouchers: 5,
+        service: "onesource",
+        price: 1_000,
+        requests: 5,
+        charged: 5_000,
+        claimed: 0,
+        stoppable: 5_000,
+        saved: 0,
+        escrowed: 50_000,
+        deposited: 50_000,
         expiry: t + 41,
-        opened_at: t - 900,
-        last_screened_at: t - 8,
-        last_score: 11,
-        revoked: false,
-        revoked_reason: null,
+        withdrawing: false,
+        status: "open",
+        riskScore: 11,
+        openTx: null,
       },
       {
-        channel_id: "0x2f07…",
-        wallet: WALLET,
+        channelId: "0x2f07",
         seller: DEMO,
-        label: "market-data",
-        token: "USDC",
-        chain_id: 8453,
-        ceiling: 20_000,
-        vouchers: 2,
+        service: "Tab demo shop",
+        price: 1_000,
+        requests: 5,
+        charged: 5_000,
+        claimed: 2_000,
+        stoppable: 0,
+        saved: 3_000,
+        escrowed: 5_000,
+        deposited: 50_000,
         expiry: t + 63,
-        opened_at: t - 600,
-        last_screened_at: t - 30,
-        last_score: 82,
-        revoked: true,
-        revoked_reason: "wallet_drainer",
+        withdrawing: false,
+        status: "closed",
+        riskScore: 0,
+        openTx: null,
       },
     ],
-    closedSellers: [DEMO],
     approvals: [],
+    receipts: [],
+    mcpUrl: `${location.origin}/mcp`,
+    network: { chainId: 8453, fork: false },
   };
 }
 
@@ -92,53 +98,49 @@ export function sampleFeed(): FeedItem[] {
     at: t - ago,
     source,
     kind,
+    wallet: WALLET,
     ...data,
   });
   return [
-    item(2400, "tab", "tab_opened", { seller: HYPER, deposit: 1_000_000 }),
-    item(2398, "brain", "screened", { seller: HYPER, verdict: "pay", reason: "no risk traits", toxic_score: 4, requested: 20_000 }),
-    item(2397, "brain", "countersigned", { seller: HYPER, ceiling: 20_000, expiry: t - 2277 }),
-    item(900, "brain", "screened", { seller: ONESOURCE, verdict: "pay", reason: "no risk traits", toxic_score: 11, requested: 25_000 }),
+    item(2400, "tab", "tab_opened", { seller: HYPER, service: "hyperextend", deposit: 50_000 }),
+    item(2398, "brain", "screened", { seller: HYPER, verdict: "pay", reason: "no adverse signals", toxic_score: 4, requested: 2_000 }),
+    item(2397, "brain", "countersigned", { seller: HYPER, ceiling: 2_000, expiry: t - 2277 }),
+    item(2396, "tab", "purchase", { seller: HYPER, service: "hyperextend", price: 2_000, url: "https://api.hyperextend.xyz/v1/candles/BTC/1m/latest" }),
+    item(900, "brain", "screened", { seller: ONESOURCE, verdict: "pay", reason: "no adverse signals", toxic_score: 11, requested: 1_000 }),
     item(610, "brain", "screened", {
       seller: "0x098b716b8aaf21512996dc57eb0615e2383e2f96",
       verdict: "refuse",
-      reason: "known scammer: linked to a reported drainer cluster",
-      toxic_score: 97,
-      requested: 50_000,
+      reason: "known scammer, sanctioned address",
+      toxic_score: 100,
+      requested: 1_000,
     }),
-    item(420, "brain", "screened", { seller: ONESOURCE, verdict: "ask", reason: "over the 0.10 USDC per-call limit", toxic_score: 11, requested: 150_000 }),
-    item(419, "brain", "approval_requested", { approval_id: "apr_7Qk2", purpose: "payment", seller: ONESOURCE, amount: 150_000, reason: "over the 0.10 USDC per-call limit" }),
+    item(420, "brain", "screened", { seller: ONESOURCE, verdict: "ask", reason: "over the 0.05 USDC this tab may spend on its own", toxic_score: 11, requested: 60_000 }),
+    item(419, "brain", "approval_requested", { approval_id: "apr_7Qk2", purpose: "payment", seller: ONESOURCE, amount: 60_000, reason: "over the 0.05 USDC this tab may spend on its own" }),
     item(371, "brain", "approval_granted", { approval_id: "apr_7Qk2", purpose: "payment", orb_verified: true }),
-    item(300, "tab", "purchase", { seller: DEMO, price: 10_000, path: "/v1/data" }),
-    item(240, "tab", "purchase", { seller: DEMO, price: 10_000, path: "/v1/data" }),
-    item(30, "brain", "revoked", {
-      seller: DEMO,
-      reason: "wallet_drainer",
-      reason_code: 4,
-      by: "watcher",
-      value_stopped: 20_000,
-      vouchers_stopped: 2,
-      score_before: 6,
-      score_now: 82,
-    }),
-    item(12, "tab", "claim_rejected", { seller: DEMO, amount: 20_000, reason: "the payer revoked this seller after it was paid" }),
-    item(6, "brain", "countersigned", { seller: HYPER, ceiling: 340_000, expiry: t + 94 }),
+    item(300, "tab", "purchase", { seller: DEMO, service: "Tab demo shop", price: 1_000, url: "/v1/data" }),
+    item(240, "tab", "purchase", { seller: DEMO, service: "Tab demo shop", price: 1_000, url: "/v1/data" }),
+    item(30, "brain", "revoked", { seller: DEMO, reason: "sold junk", reason_code: 99, by: "operator", value_stopped: 3_000, vouchers_stopped: 3 }),
+    item(6, "brain", "countersigned", { seller: HYPER, ceiling: 20_000, expiry: t + 94 }),
   ];
 }
 
-export function sampleApproval(id: string): Approval {
+export function sampleApproval(id: string): ApprovalPage {
   const t = now();
   return {
-    id,
-    purpose: "payment",
-    status: "pending",
-    wallet: WALLET,
-    seller: ONESOURCE,
-    amount: 150_000,
-    reason: "Over the 0.10 USDC per-call limit you set",
-    userCode: "KQXT-MRWD",
-    verificationUri: "https://id.worldcoin.org/device",
-    createdAt: t - 20,
-    expiresAt: t + 280,
+    approval: {
+      id,
+      purpose: "payment",
+      status: "pending",
+      wallet: WALLET,
+      seller: ONESOURCE,
+      amount: 60_000,
+      reason: "Over the 0.05 USDC this tab may spend on its own",
+      userCode: "KQXT-MRWD",
+      verificationUri: "https://sandbox.auth.world.org/device",
+      createdAt: t - 20,
+      expiresAt: t + 280,
+    },
+    service: "onesource",
+    worldUrl: "https://sandbox.auth.world.org/device",
   };
 }

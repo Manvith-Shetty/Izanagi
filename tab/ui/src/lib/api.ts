@@ -1,19 +1,22 @@
 // Tab's HTTP API, as this site uses it. Same-origin in production (Tab serves this build);
-// proxied to TAB_DEV_PROXY by `npm run dev`.
+// proxied to TAB_DEV_PROXY by `npm run dev`. The session is an HttpOnly cookie Tab sets when a
+// person signs in with World ID.
 //
-//   GET  /api/overview                 the wallet, its tabs, pending approvals
-//   GET  /api/census                   live x402 channels on Base mainnet
-//   GET  /api/feed?after=N             the merged feed since N
-//   GET  /api/feed/stream              the same, live (SSE, `event: item`)
+//   GET  /api/network                  live x402 channels on Base mainnet
+//   POST /api/signup                   start signing in with World ID
+//   GET  /api/signup/{id}              where that has got to
+//   POST /api/logout
+//   GET  /api/me                       this person's wallet, tabs and approvals   (signed in)
+//   GET  /api/stream                   their feed: history, then live (SSE)       (signed in)
 //   GET  /api/approvals/{id}           one approval, for the approval page
-//   POST /api/tabs/close   {seller, reason?}   stop paying a seller, now   (Bearer TAB_ADMIN_TOKEN)
-//   POST /api/tabs/reopen  {seller}            ask the human to allow it again (Bearer TAB_ADMIN_TOKEN)
+//   POST /api/tabs/close   {seller, reason?}   stop paying a seller, now           (signed in)
+//   POST /api/tabs/reopen  {seller}            ask the human to allow it again     (signed in)
 //
-// Reads never need a token. When Tab can't be reached the site falls back to labelled
-// sample data so it can still be shown; actions never fall back.
+// When Tab can't be reached at all the site falls back to labelled sample data so it can still
+// be shown. A Tab that answers "sign in first" is not a fallback: that shows the sign-in.
 
-import type { Approval, Census, FeedItem, Overview } from "./types";
-import { SAMPLE_CENSUS, sampleApproval, sampleFeed, sampleOverview } from "./sample";
+import type { ApprovalPage, Atomic, Census, FeedItem, Me, Stage } from "./types";
+import { SAMPLE_CENSUS, sampleApproval, sampleMe } from "./sample";
 
 export interface Loaded<T> {
   data: T;
@@ -21,51 +24,59 @@ export interface Loaded<T> {
   sample: boolean;
 }
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: { accept: "application/json" } });
+/** Tab answered, but not with JSON: it is not running behind /api (the proxy's own page came back). */
+class Unreachable extends Error {}
+
+async function get<T>(path: string): Promise<{ status: number; body: T }> {
+  let res: Response;
+  try {
+    res = await fetch(path, { credentials: "same-origin", headers: { accept: "application/json" } });
+  } catch {
+    throw new Unreachable(path);
+  }
   const type = res.headers.get("content-type") ?? "";
-  if (!res.ok || !type.includes("json")) throw new Error(`${path} answered ${res.status}`);
-  return res.json() as Promise<T>;
+  if (!type.includes("json") || res.status >= 502) throw new Unreachable(`${path} answered ${res.status}`);
+  return { status: res.status, body: (await res.json()) as T };
 }
 
-async function orSample<T>(path: string, sample: () => T): Promise<Loaded<T>> {
+export type MeState = { kind: "signed_in"; me: Me } | { kind: "signed_out" } | { kind: "sample"; me: Me };
+
+export async function loadMe(): Promise<MeState> {
   try {
-    return { data: await get<T>(path), sample: false };
+    const r = await get<Me>("/api/me");
+    if (r.status === 401) return { kind: "signed_out" };
+    if (r.status >= 400) throw new Unreachable(`/api/me answered ${r.status}`);
+    return { kind: "signed_in", me: r.body };
   } catch {
-    return { data: sample(), sample: true };
+    return { kind: "sample", me: sampleMe() };
   }
 }
 
-export const loadOverview = () => orSample<Overview>("/api/overview", sampleOverview);
-export const loadCensus = () => orSample<Census>("/api/census", () => SAMPLE_CENSUS);
-export const loadFeed = () =>
-  orSample<FeedItem[]>("/api/feed?after=0", sampleFeed).then(async (r) => {
-    // the endpoint wraps items: { items: [...] }
-    const d = r.data as unknown as { items?: FeedItem[] } | FeedItem[];
-    return { ...r, data: Array.isArray(d) ? d : (d.items ?? []) };
-  });
-export const loadApproval = (id: string) => orSample<Approval>(`/api/approvals/${encodeURIComponent(id)}`, () => sampleApproval(id));
-
-/* -------------------------------- admin token -------------------------------- */
-
-const TOKEN_KEY = "izanagi.admin";
-
-export function adminToken(): string | null {
+export async function loadCensus(): Promise<Loaded<Census>> {
   try {
-    return sessionStorage.getItem(TOKEN_KEY);
+    const r = await get<{ census: Census }>("/api/network");
+    if (r.status >= 400) throw new Unreachable(`/api/network answered ${r.status}`);
+    return { data: r.body.census, sample: false };
   } catch {
-    return null;
+    return { data: SAMPLE_CENSUS, sample: true };
   }
 }
 
-export function setAdminToken(t: string | null) {
+export class NotFound extends Error {}
+
+export async function loadApproval(id: string): Promise<Loaded<ApprovalPage>> {
+  let r: { status: number; body: ApprovalPage };
   try {
-    if (t) sessionStorage.setItem(TOKEN_KEY, t);
-    else sessionStorage.removeItem(TOKEN_KEY);
+    r = await get<ApprovalPage>(`/api/approvals/${encodeURIComponent(id)}`);
   } catch {
-    /* private mode: the token lives only as long as the page */
+    return { data: sampleApproval(id), sample: true };
   }
+  if (r.status === 404) throw new NotFound("This approval doesn't exist, or has been cleared.");
+  if (r.status >= 400) throw new Error(`Tab answered ${r.status}`);
+  return { data: r.body, sample: false };
 }
+
+/* ---------------------------------- actions ---------------------------------- */
 
 export class ActionError extends Error {
   constructor(
@@ -76,34 +87,46 @@ export class ActionError extends Error {
   }
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const token = adminToken();
+async function post<T>(path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
       method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify(body),
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
     throw new ActionError("Tab isn't answering. Check that the Tab server is running.", 0);
   }
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (res.status === 401 || res.status === 403) throw new ActionError("Tab refused the admin token. Enter it again.", res.status);
+  if (res.status === 401) throw new ActionError("You're signed out. Sign in with World ID again.", 401);
   if (!res.ok) throw new ActionError(String(json.error ?? json.reason ?? `Tab answered ${res.status}`), res.status);
   return json as T;
 }
 
-export const closeTab = (seller: string, reason?: string) => post<FeedItem>("/api/tabs/close", { seller, reason });
-export const reopenTab = (seller: string) => post<{ approvalId: string; approvalUrl: string }>("/api/tabs/reopen", { seller });
+export const signup = () => post<{ id: string; stage: Stage }>("/api/signup");
+export const logout = () => post<{ ok: boolean }>("/api/logout");
+
+export async function signupPoll(id: string): Promise<{ id: string; stage: Stage }> {
+  const r = await get<{ id: string; stage: Stage; error?: string }>(`/api/signup/${encodeURIComponent(id)}`).catch(() => {
+    throw new ActionError("Tab isn't answering. Check that the Tab server is running.", 0);
+  });
+  if (r.status >= 400) throw new ActionError(r.body.error ?? `Tab answered ${r.status}`, r.status);
+  return r.body;
+}
+
+export const closeTab = (seller: string, reason?: string) =>
+  post<{ value_stopped: Atomic; vouchers_stopped: number; tx: string | null }>("/api/tabs/close", { seller, reason });
+export const reopenTab = (seller: string) => post<{ id: string; approvalUrl: string }>("/api/tabs/reopen", { seller });
 
 /* ------------------------------------ live ------------------------------------ */
 
-/** Follow the merged feed. Returns a function that stops following. */
+/** Follow this person's feed: history first, then live. Returns a function that stops following. */
 export function followFeed(onItem: (i: FeedItem) => void, onState: (live: boolean) => void): () => void {
   let es: EventSource | null = null;
   try {
-    es = new EventSource("/api/feed/stream");
+    es = new EventSource("/api/stream", { withCredentials: true });
   } catch {
     onState(false);
     return () => {};

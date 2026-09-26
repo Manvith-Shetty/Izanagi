@@ -144,7 +144,9 @@ impl Intercepta {
         .await
     }
 
-    /// Screen the payment authorization itself (EIP-712 / Permit2 payloads).
+    /// Screen the payment authorization itself (EIP-712 / Permit2 payloads). `from` is the
+    /// wallet whose signature this is, and `message` the typed data as a JSON object: a
+    /// stringified message is accepted but silently scored Low.
     pub async fn scan_message(
         &self,
         from: &str,
@@ -159,7 +161,7 @@ impl Intercepta {
             .header("X-API-KEY", &self.api_key)
             .json(&serde_json::json!({
                 "from": from,
-                "message": message.to_string(),
+                "message": message,
                 "chainId": chain_id.to_string(),
             }))
             .send()

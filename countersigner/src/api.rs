@@ -120,9 +120,6 @@ struct CountersignRequest {
     chain_id: u64,
     /// Cumulative ceiling the agent wants authorised.
     ceiling: u128,
-    /// Optional EIP-712 payment authorization, screened via Intercepta scan-message.
-    #[serde(default)]
-    authorization: Option<serde_json::Value>,
     /// A human approval to redeem, from a previous `ask`. The agent cannot supply a subject
     /// directly: it could move one human's approval onto a different payment.
     #[serde(default)]
@@ -226,11 +223,21 @@ async fn countersign(
         }
     }
 
+    // screen the voucher itself, built here rather than taken from the agent: it is exactly
+    // what gets signed, since the countersignature commits to its digest
+    let channel_id = common::channel_id(&cfg, req.chain_id);
+    let voucher = common::voucher_typed_data(channel_id, req.ceiling, req.chain_id);
     let decision = app
         .policy
-        .evaluate(&seller, &format!("{:#x}", req.channel.token), req.chain_id, req.ceiling, req.authorization.as_ref())
+        .evaluate(
+            &format!("{wallet:#x}"),
+            &seller,
+            &format!("{:#x}", req.channel.token),
+            req.chain_id,
+            req.ceiling,
+            Some(&voucher),
+        )
         .await;
-    let channel_id = common::channel_id(&cfg, req.chain_id);
     let cid = format!("{channel_id:#x}");
     let approved = app.sessions.approved_limit(&cid).await;
     let within_approved = matches!(decision.verdict, Verdict::Ask { ceiling, .. } if ceiling <= approved);

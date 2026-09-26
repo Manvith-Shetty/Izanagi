@@ -2,25 +2,20 @@ import { Link } from "react-router-dom";
 import { Footer, Header } from "../components/Chrome";
 import { Slope } from "../components/Slope";
 import { CopyField } from "../components/CopyField";
-import { useCensus, useOverview } from "../lib/hooks";
-import { usdc } from "../lib/format";
+import { useCensus, useMe } from "../lib/hooks";
 
 function Census() {
   const { data } = useCensus();
-  if (!data) return <p className="h-[3.4rem]" />;
+  if (!data || !data.data.measuredAt) return <p className="h-[3.4rem]" />;
   const c = data.data;
   return (
     <p className="max-w-[46rem] text-[1.08rem] leading-[1.7] text-sumi-soft md:text-[1.18rem]">
-      {c.inEscrow !== undefined && (
-        <>
-          Right now <span className="num font-semibold text-sumi">{usdc(c.inEscrow)} USDC</span> sits in x402 escrow on Base.{" "}
-        </>
-      )}
-      In the last {c.windowDays} days, <span className="num font-semibold text-sumi">{c.channels}</span> agent payment channels opened
-      there, from {c.payers} wallets. <span className="num font-semibold text-sumi">{c.singleKey} of {c.channels}</span> are
-      controlled by a single key, and <span className="num font-semibold text-beni">{c.withPolicy}</span> can be stopped once a payment
-      is signed.
-      {data.sample && <span className="text-stone"> Measured on Base mainnet, 26 September 2026.</span>}
+      Right now <span className="num font-semibold text-sumi">{(Number(c.escrowUsdc) / 1_000_000).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC</span> sits in x402 escrow on Base. In the last 14
+      days, <span className="num font-semibold text-sumi">{c.channelsLast14d.toLocaleString("en-US")}</span> agent payment channels opened
+      there, and <span className="num font-semibold text-sumi">{c.channels.toLocaleString("en-US")}</span> since it launched, from{" "}
+      {c.payers.toLocaleString("en-US")} wallets. <span className="num font-semibold text-beni">{c.countersignPayers}</span> of those
+      wallets can stop a payment once it is signed.
+      {data.sample && <span className="text-stone"> Measured on Base mainnet, 27 September 2026.</span>}
     </p>
   );
 }
@@ -55,8 +50,8 @@ function Mark({ c }: { c: Cell }) {
 }
 
 export default function Landing() {
-  const overview = useOverview();
-  const mcpUrl = overview.data?.data.mcpUrl ?? `${location.origin}/mcp`;
+  const me = useMe();
+  const mcpUrl = me.data?.kind === "signed_in" ? me.data.me.mcpUrl : `${location.origin}/mcp`;
   const claudeConfig = JSON.stringify({ mcpServers: { izanagi: { type: "http", url: mcpUrl } } }, null, 2);
 
   return (

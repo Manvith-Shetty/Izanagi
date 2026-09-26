@@ -88,9 +88,11 @@ impl PolicyEngine {
     /// Screen a proposed x402 payment and decide what happens next.
     ///
     /// `seller` and `token` are screened as MAINNET addresses (Intercepta's data is mainnet),
-    /// regardless of which chain the payment settles on.
+    /// regardless of which chain the payment settles on. `authorization` is the typed data
+    /// `payer` will sign.
     pub async fn evaluate(
         &self,
+        payer: &str,
         seller: &str,
         token: &str,
         chain_id: u64,
@@ -139,7 +141,7 @@ impl PolicyEngine {
 
         // ---- 3. the authorization payload itself ----
         let message_scan = match authorization {
-            Some(msg) => self.screener.message(seller, msg, chain_id).await.ok(),
+            Some(msg) => self.screener.message(payer, msg, chain_id).await.ok(),
             None => None,
         };
         if let Some(ms) = &message_scan {
@@ -233,7 +235,7 @@ mod tests {
     #[tokio::test]
     async fn fails_closed_without_an_api_key() {
         let d = engine()
-            .evaluate("0x1", "0x2", 8453, 1_000_000, None)
+            .evaluate("0x3", "0x1", "0x2", 8453, 1_000_000, None)
             .await;
         assert_eq!(d.verdict, Verdict::Refuse, "no screening data must mean no signature");
         assert!(d.reason.contains("failing closed"));

@@ -54,9 +54,31 @@ pub fn router(app: Shared) -> Router {
         .with_state(app.clone());
 
     let web = ServeDir::new(&app.env.web_dir).fallback(ServeFile::new(app.env.web_dir.join("index.html")));
-    api.route_service("/mcp/{token}", mcp_service(app.clone()))
-        .route_service("/mcp", mcp_service(app))
-        .fallback_service(web)
+    let mcp = Router::new()
+        .route_service("/mcp/{token}", mcp_service(app.clone()))
+        .route_service("/mcp", mcp_service(app.clone()))
+        .layer(axum::middleware::from_fn_with_state(app, mcp_gate));
+    api.merge(mcp).fallback_service(web)
+}
+
+/// An MCP link that belongs to nobody is refused at the door, before any protocol exchange.
+async fn mcp_gate(
+    State(app): State<Shared>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let from_path = req.uri().path().strip_prefix("/mcp/").map(|t| t.trim_end_matches('/').to_string());
+    let from_header = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(String::from);
+    let token = from_path.or(from_header).unwrap_or_default();
+    if app.store.account_by_mcp_token(&token).await.is_none() {
+        return bad(StatusCode::UNAUTHORIZED, "unknown Tab link: copy yours from your Tab dashboard");
+    }
+    next.run(req).await
 }
 
 fn mcp_service(app: Shared) -> StreamableHttpService<TabMcp, LocalSessionManager> {
@@ -146,13 +168,18 @@ async fn approval(State(app): State<Shared>, Path(id): Path<String>) -> Response
     match app.brain.approval(&id).await {
         Ok(Some(v)) => {
             let seller = v.seller.to_lowercase();
-            let service = app
-                .catalog
-                .list(None)
+            // the name Tab knows this seller by: its own tab records first, then the catalog
+            let known = app
+                .store
+                .all_tabs()
                 .await
                 .into_iter()
-                .find(|l| l.seller.to_lowercase() == seller)
-                .map(|l| l.name);
+                .find(|t| format!("{:#x}", t.seller) == seller)
+                .and_then(|t| t.service.as_deref().map(crate::buyer::short_service));
+            let service = match known {
+                Some(n) => Some(n),
+                None => app.catalog.list(None).await.into_iter().find(|l| l.seller.to_lowercase() == seller).map(|l| l.name),
+            };
             let world = v.world_link().to_string();
             Json(json!({ "approval": v, "service": service, "worldUrl": world })).into_response()
         }

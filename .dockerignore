@@ -1,0 +1,20 @@
+# Secrets never enter an image: every .env file stays on the machine it was written on.
+**/.env
+**/.env.*
+!**/.env.example
+scripts/.env*
+
+# local state and build output
+**/.state
+target
+**/node_modules
+tab/web/dist
+
+# the contracts are not built in the image (Tab embeds the compiled bytecode in tab/assets)
+contracts/out
+contracts/cache
+contracts/lib
+contracts/fixture.json
+
+.git
+.claude

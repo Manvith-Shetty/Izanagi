@@ -14,12 +14,22 @@ const dot: Record<Tone, string> = {
   stone: "bg-stone-light",
 };
 
+/** A paid URL without its host: what was bought, not who from. */
+function path(url: string): string {
+  try {
+    return new URL(url, location.origin).pathname;
+  } catch {
+    return url;
+  }
+}
+
 function str(v: unknown): string {
   return typeof v === "string" ? v : v == null ? "" : String(v);
 }
 
 export function describe(i: FeedItem, name: (addr: string) => ReactNode): { tone: Tone; text: ReactNode; detail?: ReactNode } {
-  const seller = name(str(i.seller));
+  // Tab's own events carry the seller's name; the countersigner's carry only its address
+  const seller = i.service ? <span className="font-semibold">{str(i.service)}</span> : name(str(i.seller));
   const amt = (k: string) => <span className="num font-semibold">{usdcShort(i[k] as number)} USDC</span>;
   switch (i.kind) {
     case "screened": {
@@ -62,7 +72,7 @@ export function describe(i: FeedItem, name: (addr: string) => ReactNode): { tone
     case "human_bound":
       return { tone: "sumi", text: <>This wallet now answers to one verified person</> };
     case "revoked": {
-      const by = str(i.by) === "watcher" ? "the watcher, after a score change" : str(i.by) === "human" ? "you, with World ID" : "you";
+      const by = str(i.by) === "watcher" ? "the watcher, after a score change" : str(i.by) === "human" ? "you, with World ID" : "you or your agent";
       const before = i.score_before != null && i.score_now != null ? <>, score {Number(i.score_before).toFixed(0)} to {Number(i.score_now).toFixed(0)}</> : null;
       return {
         tone: "beni",
@@ -89,11 +99,36 @@ export function describe(i: FeedItem, name: (addr: string) => ReactNode): { tone
     }
     case "restored":
       return { tone: "tide", text: <>Reopened the tab with {seller}</>, detail: "Approved by a person with World ID" };
+    case "account_created":
+      return { tone: "sumi", text: <>Your wallet is ready</>, detail: <>Free trial {amt("trial")}</> };
     case "tab_opened":
       return { tone: "sumi", text: <>Opened a tab with {seller}</>, detail: <>Deposit {amt("deposit")}</> };
+    case "tab_topped_up":
+      return { tone: "sumi", text: <>Added {amt("deposit")} to the tab with {seller}</> };
     case "purchase":
-      return { tone: "stone", text: <>Paid {seller} {amt("price")}</>, detail: i.path ? <span className="hex">{str(i.path)}</span> : undefined };
-    case "claimed":
+      return { tone: "stone", text: <>Paid {seller} {amt("price")}</>, detail: i.url ? <span className="hex">{path(str(i.url))}</span> : undefined };
+    case "purchase_refused":
+      return {
+        tone: "beni",
+        text: <>Didn't pay {seller}</>,
+        detail: (
+          <>
+            {words(str(i.reason))}
+            {i.toxicScore != null && <span className="num">, score {Number(i.toxicScore).toFixed(0)}</span>}
+          </>
+        ),
+      };
+    case "approval_needed":
+      return {
+        tone: "kin",
+        text: <>Your agent needs your OK to spend up to {amt("limit")} with {seller}</>,
+        detail: (
+          <Link className="link" to={`/approve/${str(i.approvalId)}`}>
+            Open the approval
+          </Link>
+        ),
+      };
+    case "seller_claimed":
       return { tone: "sumi", text: <>{seller} cashed in {amt("amount")}</> };
     case "claim_rejected":
       return { tone: "beni", text: <>The escrow rejected {seller}'s claim for {amt("amount")}</>, detail: str(i.reason) };

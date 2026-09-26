@@ -25,9 +25,9 @@ use rmcp::{schemars, tool, tool_handler, tool_router, ErrorData as McpError, Pee
 use serde::Deserialize;
 use std::time::Duration;
 
-const INSTRUCTIONS: &str = "Tab lets you pay x402 APIs from the user's own Tab: a wallet on Base whose payments can still \
-be stopped after they are made, until the seller cashes in. Every payment is screened for fraud first. Small ones just \
-happen; bigger ones need the user's approval through World ID. Use find_services to discover paid APIs, buy to call one. \
+const INSTRUCTIONS: &str = "Tab lets you pay x402 APIs from the user's own Tab, a spending account on Base. Every payment \
+is checked first: the seller is screened for fraud, the amount is held to the user's limits, and anything bigger needs \
+the user's approval through World ID. Payments stay stoppable until the seller collects. Use find_services to discover paid APIs, buy to call one. \
 When buy or wait_for_approval returns an approval link, show that link and code to the user exactly as written, then \
 call wait_for_approval. Never retry a refused purchase with a different seller without telling the user. If a seller \
 returns junk or looks wrong, call close_tab: the user keeps the money for anything the seller has not cashed in yet. \

@@ -91,6 +91,37 @@ pub fn voucher_digest(channel_id: B256, max_claimable: u128, chain_id: u64) -> B
         .eip712_signing_hash(&domain(chain_id))
 }
 
+/// The voucher as `eth_signTypedData_v4` JSON: exactly what `voucher_digest` hashes, in the
+/// form a wallet (or Intercepta's signature analysis) reads. Amounts are decimal strings so
+/// a `uint128` survives JSON.
+pub fn voucher_typed_data(channel_id: B256, max_claimable: u128, chain_id: u64) -> serde_json::Value {
+    serde_json::json!({
+        "types": {
+            "EIP712Domain": [
+                { "name": "name", "type": "string" },
+                { "name": "version", "type": "string" },
+                { "name": "chainId", "type": "uint256" },
+                { "name": "verifyingContract", "type": "address" },
+            ],
+            "Voucher": [
+                { "name": "channelId", "type": "bytes32" },
+                { "name": "maxClaimableAmount", "type": "uint128" },
+            ],
+        },
+        "primaryType": "Voucher",
+        "domain": {
+            "name": "x402 Batch Settlement",
+            "version": "1",
+            "chainId": chain_id,
+            "verifyingContract": format!("{ESCROW:#x}"),
+        },
+        "message": {
+            "channelId": format!("{channel_id:#x}"),
+            "maxClaimableAmount": max_claimable.to_string(),
+        },
+    })
+}
+
 /// The hash the risk oracle countersigns.
 ///
 /// Deliberately a bare struct hash rather than full EIP-712: it is never shown to a wallet,
@@ -135,6 +166,17 @@ pub fn encode_signature_blob(
 mod tests {
     use super::*;
     use alloy::primitives::b256;
+
+    /// What Intercepta screens must be what the agent signs: the typed data re-hashes to
+    /// the voucher digest.
+    #[test]
+    fn voucher_typed_data_hashes_to_the_signed_digest() {
+        let cid = b256!("79cc65f4000000000000000000000000000000000000000000000000000000aa");
+        let ceiling = u128::MAX - 1;
+        let typed: alloy::dyn_abi::TypedData =
+            serde_json::from_value(voucher_typed_data(cid, ceiling, 8453)).unwrap();
+        assert_eq!(typed.eip712_signing_hash().unwrap(), voucher_digest(cid, ceiling, 8453));
+    }
 
     /// Cross-checked against `cast call` on Base mainnet -- see README.
     #[test]

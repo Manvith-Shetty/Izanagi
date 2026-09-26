@@ -22,16 +22,19 @@ export default function Approve() {
   const q = useQuery({
     queryKey: ["approval", id],
     queryFn: () => loadApproval(id),
-    refetchInterval: (query) => (query.state.data?.data.status === "pending" && !query.state.data.sample ? 2000 : false),
+    refetchInterval: (query) => (query.state.data?.data.approval.status === "pending" && !query.state.data.sample ? 2000 : false),
   });
 
-  const a = q.data?.data;
+  const page = q.data?.data;
+  const a = page?.approval;
+  const who = page?.service ?? (a ? short(a.seller) : "");
   const sample = q.data?.sample ?? false;
   const left = a ? a.expiresAt - t : 0;
   const total = a ? Math.max(1, a.expiresAt - a.createdAt) : 1;
-  const status = a && a.status === "pending" && left <= 0 ? "expired" : a?.status;
+  const raw = a && a.status === "pending" && left <= 0 ? "expired" : a?.status;
+  const status = raw === "used" ? "approved" : raw;
   const restore = a?.purpose === "restore";
-  const worldLink = a?.verificationUriComplete ?? a?.verificationUri;
+  const worldLink = page?.worldUrl || a?.verificationUriComplete || a?.verificationUri;
 
   const copy = async () => {
     if (!a) return;
@@ -55,14 +58,16 @@ export default function Approve() {
       </header>
 
       <main className="mx-auto w-full max-w-[30rem] flex-1 px-r4 pb-r6 pt-r5">
-        {q.isLoading || !a ? (
+        {q.isError ? (
+          <p className="text-beni-deep">{q.error instanceof Error ? q.error.message : "Tab couldn't load this approval."}</p>
+        ) : q.isLoading || !a ? (
           <p className="text-stone">Loading the request…</p>
         ) : (
           <>
-            <p className="text-[0.95rem] text-stone">{restore ? "Your agent wants to reopen a closed tab" : "Your agent is asking to pay"}</p>
+            <p className="text-[0.95rem] text-stone">{restore ? "Your agent wants to reopen a closed tab" : `Your agent wants to spend more with ${who}`}</p>
             {restore ? (
               <h1 className="display mt-r2 text-[2.3rem]">
-                Start paying <span className="hex text-[0.7em] tracking-normal">{short(a.seller)}</span> again?
+                Start paying {page?.service ?? <span className="hex text-[0.7em] tracking-normal">{short(a.seller)}</span>} again?
               </h1>
             ) : (
               <h1 className="display num mt-r1 text-[3.6rem] leading-none">
@@ -73,7 +78,10 @@ export default function Approve() {
               {!restore && (
                 <div className="flex gap-r3 py-r3">
                   <dt className="w-20 shrink-0 text-stone">To</dt>
-                  <dd className="hex min-w-0 break-all text-sumi">{a.seller}</dd>
+                  <dd className="min-w-0 break-all text-sumi">
+                    {page?.service && <span className="font-semibold">{page.service} </span>}
+                    <span className="hex">{a.seller}</span>
+                  </dd>
                 </div>
               )}
               <div className="flex gap-r3 py-r3">
@@ -126,11 +134,11 @@ export default function Approve() {
                 </section>
               )}
 
-              {status === "granted" && (
+              {status === "approved" && (
                 <section className="rounded-[1.25rem] bg-tide p-r5 text-paper" style={{ boxShadow: "var(--shadow-float)" }}>
                   <p className="display text-[1.8rem] tracking-[-0.02em]">Approved</p>
                   <p className="mt-r2 text-paper/85">
-                    {restore ? "The tab is open again. Your agent can pay this seller." : "Izanagi countersigned this one payment. Your agent has been told."}
+                    {restore ? "The tab is open again. Your agent can pay this seller." : "Your agent may now spend up to this amount on this tab. It has been told."}
                     {a.orbVerified ? " Verified with your Orb World ID." : ""}
                   </p>
                   {a.tx && (
@@ -155,7 +163,7 @@ export default function Approve() {
             <p className="mt-r5 text-[0.88rem] leading-relaxed text-stone">
               {restore
                 ? "Approving reopens this one tab. Vouchers from before it was closed stay void."
-                : "You're approving this one payment only: this amount, to this seller. It can't be reused for anything else."}{" "}
+                : "You're approving this tab only: up to this amount, with this seller. It can't be reused for anything else."}{" "}
               Izanagi checks your World ID on its server and never sees your identity, only that a verified person said yes.
             </p>
           </>

@@ -135,10 +135,17 @@ fn usdc(v: u128) -> String {
 fn service_name(header: &str) -> Option<String> {
     let v: Value = decode_header(header).ok()?;
     let r = &v["resource"];
-    r["serviceName"]
-        .as_str()
-        .or_else(|| r["description"].as_str())
-        .map(|s| s.chars().take(80).collect())
+    if let Some(n) = r["serviceName"].as_str() {
+        return Some(n.chars().take(48).collect());
+    }
+    Some(short_service(r["description"].as_str()?))
+}
+
+/// A seller's short name from its description:
+/// "Tab demo shop: live Bitcoin price..." -> "Tab demo shop"; "Latest block - tip" -> "Latest block".
+pub fn short_service(d: &str) -> String {
+    let short = [":", " - ", " — ", ". "].iter().filter_map(|sep| d.split_once(sep).map(|(a, _)| a)).min_by_key(|a| a.len()).unwrap_or(d);
+    short.trim().chars().take(48).collect()
 }
 
 impl Buyer {
@@ -496,6 +503,8 @@ mod tests {
     fn a_sellers_name_comes_from_its_402() {
         let h = include_str!("../../agent/fixtures/402-hyperextend.b64").trim();
         assert_eq!(service_name(h).as_deref(), Some("hyperextend"));
+        let o = include_str!("../../agent/fixtures/402-onesource.b64").trim();
+        assert_eq!(service_name(o).as_deref(), Some("Latest Ethereum block height"));
         assert!(service_name("not base64").is_none());
     }
 

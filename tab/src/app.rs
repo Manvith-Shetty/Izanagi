@@ -79,7 +79,7 @@ impl App {
         let scores: Vec<Value> = brain.as_ref().and_then(|b| b["sessions"].as_array().cloned()).unwrap_or_default();
 
         let mut tabs = Vec::new();
-        let (mut spent, mut stoppable, mut escrowed) = (0u128, 0u128, 0u128);
+        let (mut spent, mut stoppable, mut escrowed, mut saved) = (0u128, 0u128, 0u128, 0u128);
         for t in self.store.tabs_of(&a.id).await {
             let on = self.chain.tab(t.channel_id).await.ok();
             let claimed = on.map(|o| o.total_claimed).unwrap_or(t.claimed);
@@ -94,15 +94,20 @@ impl App {
             if !is_closed && !lapsed {
                 stoppable += open_value;
             }
+            if is_closed {
+                saved += open_value;
+            }
             tabs.push(json!({
                 "channelId": t.channel_id,
                 "seller": seller,
-                "service": t.service,
+                "service": t.service.as_deref().map(crate::buyer::short_service),
                 "price": t.price,
                 "requests": t.requests,
                 "charged": t.charged,
                 "claimed": claimed,
                 "stoppable": if is_closed || lapsed { 0 } else { open_value },
+                // signed but never cashed in, on a tab now closed: money the person kept
+                "saved": if is_closed { open_value } else { 0 },
                 "escrowed": balance.saturating_sub(claimed),
                 "deposited": t.deposited,
                 "expiry": t.expiry,
@@ -124,10 +129,13 @@ impl App {
                 "fundTx": a.fund_tx,
             },
             "wallet": wallet,
-            "totals": {"spent": spent, "stoppable": stoppable, "escrowed": escrowed},
+            "totals": {"spent": spent, "stoppable": stoppable, "escrowed": escrowed, "saved": saved},
             "tabs": tabs,
             "approvals": brain.as_ref().map(|b| b["approvals"].clone()).unwrap_or(json!([])),
-            "receipts": self.store.receipts_of(&a.id, 25).await,
+            "receipts": self.store.receipts_of(&a.id, 25).await.into_iter().map(|mut r| {
+                r.service = r.service.as_deref().map(crate::buyer::short_service);
+                r
+            }).collect::<Vec<_>>(),
             "mcpUrl": self.env.mcp_url(&a.mcp_token),
             "network": {"chainId": self.env.chain_id, "fork": self.env.is_fork()},
         })

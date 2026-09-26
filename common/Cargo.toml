@@ -16,3 +16,7 @@ anyhow.workspace = true
 reqwest.workspace = true
 base64.workspace = true
 dotenvy.workspace = true
+
+[dev-dependencies]
+# re-hashes the typed data we screen, to prove it is what gets signed
+alloy = { workspace = true, features = ["eip712"] }
