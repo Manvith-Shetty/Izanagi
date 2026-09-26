@@ -63,7 +63,7 @@ function CreateWallet({ id, stage, onStage }: { id: string; stage: Extract<Stage
         </button>
       </div>
       <p className="muted" style={{ fontSize: "var(--t-sm)" }}>
-        Two MetaMask prompts: a free signature, then the transaction that creates the wallet (a cent or less of ETH on Base).
+        Two MetaMask prompts: a free signature, then the transaction that creates the wallet (about two cents of ETH on Base).
       </p>
       {step && <div className="notice">{step}</div>}
       {error && <div className="error">{error}</div>}

@@ -28,9 +28,9 @@ Everything runs on **Base mainnet** with real USDC, against Coinbase's deployed 
 
 | | |
 |---|---|
-| Website | `https://REPLACE-with-the-vercel-domain` |
-| Demo shop (goes rogue after 3 calls) | `https://REPLACE-with-the-seller-domain/v1/data` |
-| Backend health | `https://REPLACE-with-the-tab-domain/api/health` |
+| Website | **[izanagi-tab.vercel.app](https://izanagi-tab.vercel.app)** |
+| Demo shop (goes rogue after 3 calls) | [`seller-production-18f0.up.railway.app/v1/data`](https://seller-production-18f0.up.railway.app/v1/data) |
+| Backend health | [`tab-production-5655.up.railway.app/api/health`](https://tab-production-5655.up.railway.app/api/health) |
 
 1. **Get your Tab**: verify you're a unique human with World ID (the event's sandbox, from a
    browser), then create your own Countersign wallet from MetaMask. It's yours from the first
