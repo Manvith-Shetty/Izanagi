@@ -10,16 +10,36 @@ Izanagi is built on x402's `batch-settlement` scheme, where it isn't. The agent 
 vouchers continuously off-chain; the seller only cashes them in at the end; and Coinbase's
 deployed escrow asks our contract *"is this valid?"* **at claim time**.
 
-So a seller that turns malicious forty minutes after your agent already paid — but before
-settlement — still doesn't get the money.
+So a seller that turns malicious after your agent already paid — but before it cashes in —
+still doesn't get the money. How long that window stays open is the seller's choice: busy
+sellers on Base cash in every 1–5 minutes, quiet ones go days without claiming.
 
 ```
-agent signs ────────── 40 minutes of paid API calls ────────── seller claims
+agent signs ──────── minutes to days of paid API calls ──────── seller claims
      │                                                              │
   everyone else                                               Izanagi
   checks here                                                 checks here
   (already committed)                                         (can still say no)
 ```
+
+## Try it live
+
+Everything runs on **Base mainnet** with real USDC, against Coinbase's deployed escrow.
+
+| | |
+|---|---|
+| Website | `https://REPLACE-with-the-vercel-domain` |
+| Demo shop (goes rogue after 3 calls) | `https://REPLACE-with-the-seller-domain/v1/data` |
+| Backend health | `https://REPLACE-with-the-tab-domain/api/health` |
+
+1. **Get your free Tab**: verify you're a unique human with World ID (the event's sandbox, from
+   a browser) and get your own Countersign wallet with $0.25 of USDC.
+2. **Connect your AI**: the dashboard gives you a personal MCP link. Add it to Claude, then ask
+   *"Use Tab to get the latest Bitcoin price from hyperextend."*
+3. **Watch it stop**: buy from the demo shop until it turns rogue, then **Close tab**. The shop
+   can no longer collect for calls it already served.
+4. **Make it yours** (optional): add USDC from MetaMask, approve with World ID, and only your
+   MetaMask can take money out.
 
 ---
 
@@ -54,10 +74,26 @@ The countersigning key holds a **veto, never the funds**:
 | Move money | ✗ | ✗ | ✓ | ✗ |
 | Redirect to another seller | ✗ | ✗ | ✓ | ✗ |
 | Block a payment | ✗ | ✓ | ✓ | — |
-| **Recover funds** | ✗ | ✗ | ✓ | ✓ after 15 min |
+| **Recover funds** | ✗ | ✗ | ✓ | ✓ after the withdraw delay |
 
 Neither key alone is dangerous. If the oracle disappears forever, the owner still recovers
 the escrow unilaterally via `initiateWithdraw`/`finalizeWithdraw` — verified in the tests.
+The wait is the channel's `withdrawDelay`, which the seller sets: 15 minutes at the minimum,
+a day for the real sellers we paid.
+
+### Your money, your keys
+
+A free trial wallet is owned by the operator's treasury. When you add money from MetaMask, the
+server checks the USDC transfer on chain and asks **your** World ID to approve handing the wallet
+to the account that sent it. Then `transferOwnership` moves every owner power to that account:
+withdrawals, keys, the collector. A stolen login cannot claim your wallet for someone else's
+account, because only the World ID bound to the wallet at signup can approve.
+
+The agent opens tabs through the wallet's own `openTab`, which approves the deposit collector for
+exactly that deposit and resets it to zero. The collector itself only moves funds into a channel
+the wallet gates (`payerAuthorizer == 0`). Without that check, anyone could open a channel funded
+by a standing allowance, name themselves its authorizer, and claim it: we found that on a fork of
+the real escrow, and [`TabFlow.t.sol`](contracts/test/TabFlow.t.sol) keeps it closed.
 
 ---
 
@@ -158,9 +194,10 @@ acr_values_supported           [https://world.org/oidc/acr/orb-v3]
 All tests run against the **real deployed escrow on real mainnet forks** with real USDC.
 
 ```
-contracts:  24 passed, 0 failed     (Base, Optimism, Arbitrum forks)
-rust:       73 passed, 0 failed
+contracts:  39 passed, 0 failed     (Base, Optimism, Arbitrum forks)
+rust:      139 passed, 0 failed
 seller e2e:  1 passed, 0 failed     (Base fork, real escrow, over HTTP)
+tab e2e:     1 passed, 0 failed     (Base fork: trial → tab → handover → every cent back)
 ```
 
 The seller's end-to-end test drives its real HTTP router and claim loop against a Base fork
@@ -174,13 +211,23 @@ Covered: happy path · agent-key compromise · wrong oracle key · missing oracl
 expired attestation · attestation bound to a different seller · replay · over-ceiling ·
 over-balance · revocation before signing · **revocation after signing** · un-revoke ·
 agent cannot revoke · agent cannot withdraw · oracle cannot withdraw · owner recovery with
-the oracle absent · direct claim by the seller · claim-before-revoke is final.
+the oracle absent · direct claim by the seller · claim-before-revoke is final · a stranger
+routing the wallet's allowance into a channel they authorise · the agent opening an ungated
+or long-locked channel · no allowance left standing after a tab · a handover moving every
+owner power, once, only for the owner the wallet's human approved.
 
 Plus:
 - **Cross-language parity** — signatures produced by the Rust countersigner are accepted by
   the deployed escrow, and become unclaimable once revoked ([`RustParity.t.sol`](contracts/test/RustParity.t.sol)).
 - **Real deployment path** — deployed through the canonical CREATE2 deployer, not cheatcodes.
-- **A real mainnet seller** — `0xdF1b…43A9`, which receives 354 of the 379 live channels on Base.
+- **A real mainnet seller** — `0xdF1b…43A9`, which received 354 of 379 live channels on Base
+  when we measured.
+- **Real sellers, real money, on mainnet** — a Countersign wallet
+  (`0x81E0FAC8aA64cE0E95Ec43337568c0744aB0C70b`) paid two third-party x402 sellers on Base
+  mainnet: hyperextend (Bitcoin 1-minute candles, 0.002 USDC a call) and onesource (the
+  Ethereum block number, 0.001 USDC). Neither seller changed anything to accept an EIP-1271
+  payer. [`RealSeller.t.sol`](contracts/test/RealSeller.t.sol) replays both on a fork with
+  their live channel terms, including a revocation after signing.
 
 ### Measured numbers
 
@@ -189,9 +236,17 @@ Plus:
 | `claimWithSignature` through EIP-1271 | **164,645 gas** (~$0.0027 on Base) |
 | `revoke` — the kill switch | ~30,000 gas (~$0.0005) |
 | Whole demo, on mainnet | **~$0.0065** |
-| Live x402 channels on Base (14 days) | 379, across 61 payer wallets |
-| Of those, guarded by a single hot key | **379 / 379** |
-| Using EIP-1271 policy | **0 / 379** |
+
+The escrow on Base, from its logs and state (measured Sep 26, 2026; the website shows the live
+figures):
+
+| | |
+|---|---|
+| Channels ever opened | **1,724**, from 201 payers to 75 sellers |
+| Last 14 days | 399 channels, 66 payers |
+| Claims in the last 7 days | 4,434, worth $15.18 |
+| How often active sellers cash in | every **1–5 minutes** (median); hyperextend and onesource: not once in 7 days |
+| Payers that are a policy contract | **none**: one channel ever left `payerAuthorizer` empty, and its payer is a plain key |
 
 ---
 
@@ -205,8 +260,10 @@ countersigner/  the brain: World OIDC, policy, budgets, the signing key, the wat
 agent/          demo agent: profiles the Bazaar, pays x402 sellers through the countersigner
 seller/         x402 batch-settlement seller: screens payers, verifies vouchers via
                 EIP-1271, cashes them in through the escrow
-scripts/        fork-setup.sh: deploy Countersign on a Base fork and open a channel
-tab/            the Izanagi server and web UI: dashboard, World ID approvals, MCP endpoint
+scripts/        fork-setup.sh: deploy Countersign on a Base fork and open a channel;
+                railway-setup.sh: generate and fund the production config
+tab/            the Izanagi server: API, MCP endpoint, a wallet per person, handovers
+tab/web/        the website (Vercel): sign-up, dashboard, World ID approvals, MetaMask
 ```
 
 The seller and agent speak x402 v2 as specified in
@@ -226,6 +283,7 @@ was invoked from, so the per-crate files are the single source of truth.
 | [`countersigner/.env.example`](countersigner/.env.example) | every secret and every threshold |
 | [`agent/.env.example`](agent/.env.example) | one key, and no authority |
 | [`seller/.env.example`](seller/.env.example) | the x402 endpoint, its payer thresholds and claim policy |
+| [`tab/src/env.rs`](tab/src/env.rs) | Tab has no local example: it runs on Railway, and [`railway-setup.sh`](scripts/railway-setup.sh) writes its variables |
 
 A missing or malformed key names itself at startup rather than failing halfway through a
 payment:
@@ -264,6 +322,12 @@ source <(scripts/fork-setup.sh) && cargo test -p seller -- --ignored   # seller 
 export BASE_RPC=https://mainnet.base.org && (cd contracts && forge test)
 ```
 
+## Deploying
+
+Backend on Railway (three services from one Dockerfile), website on Vercel, everything on Base
+mainnet. The website proxies `/api` to the backend, so the login cookie stays first-party; MCP
+links point straight at the backend. Step by step: **[docs/deploy.md](docs/deploy.md)**.
+
 ## Known limitations
 
 Stated plainly, because they're real:
@@ -276,13 +340,23 @@ Stated plainly, because they're real:
    pre-baked into a signature or a pre-flipped storage bit.
 3. **Standard sellers don't expect vouchers to expire.** The spec says vouchers carry no
    expiry, but a Countersign voucher is only claimable until its attestation lapses
-   (`ATTESTATION_TTL`, 120s). A seller that waits longer than that after the agent's last
-   request loses the claim. Our seller reads the expiry from the signature and claims
-   `CLAIM_MARGIN_SECS` before it; a stock x402 seller would not. So the kill switch has a
-   real cost for sellers, and it's something to negotiate, not hide: a longer TTL means a
-   longer revocation window.
+   (`ATTESTATION_TTL`, 120s by default). A seller that waits longer than that after the
+   agent's last request loses the claim. Our seller reads the expiry from the signature and
+   claims `CLAIM_MARGIN_SECS` before it; a stock x402 seller would not. Real sellers like
+   hyperextend and onesource went a week without claiming, so the mainnet deployment sets
+   `ATTESTATION_TTL` to 30 days: there, revocation is the brake, not expiry. The kill switch
+   has a real cost for sellers, and it's something to negotiate, not hide.
 4. **The oracle can grief by refusing to sign.** Bounded: the owner recovers unilaterally
-   after `withdrawDelay` (15 minutes minimum).
+   after `withdrawDelay` (15 minutes minimum, a day for the real sellers we paid).
+5. **The phone-code World ID flow runs on World's sandbox only.** The device grant a headless
+   agent needs is offered by `sandbox.auth.world.org`, the event's environment, but not by
+   production `id.worldcoin.org`. Production would send the person an ordinary login link
+   (authorization code + PKCE) instead.
+6. **The operator runs both signing keys.** The agent key and the oracle key are two keys, but
+   one operator holds both on its servers, so a breach of those servers could sign both halves
+   of a voucher. Separate custody, and a spending limit enforced in the contract itself, are
+   the fixes before real money at scale.
+
 ## License
 
 MIT
