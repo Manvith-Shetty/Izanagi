@@ -1,0 +1,28 @@
+[package]
+name = "seller"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "countersign_seller"
+path = "src/lib.rs"
+
+[[bin]]
+name = "seller"
+path = "src/main.rs"
+
+[dependencies]
+countersign-common = { path = "../common" }
+alloy.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dotenvy.workspace = true
+axum.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
