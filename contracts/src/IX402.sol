@@ -34,4 +34,5 @@ interface IERC20 {
     function transfer(address t, uint256 a) external returns (bool);
     function approve(address s, uint256 a) external returns (bool);
     function balanceOf(address a) external view returns (uint256);
+    function allowance(address o, address s) external view returns (uint256);
 }

@@ -38,7 +38,7 @@ export interface ReceiptLine {
 
 export interface ApprovalView {
   id: string;
-  purpose: "payment" | "restore" | "enroll";
+  purpose: "payment" | "restore" | "enroll" | "handover";
   status: "pending" | "approved" | "denied" | "expired" | "used";
   wallet: string;
   seller: string;
@@ -56,13 +56,22 @@ export interface ApprovalView {
 
 export interface Me {
   account: { id: string; wallet: string; human: string; createdAt: number; trial: number; deployTx: string | null; fundTx: string | null };
-  wallet: { usdc: number; allowance: number; paused: boolean; owner: string; riskOracle: string } | null;
+  wallet: { usdc: number; paused: boolean; owner: string; riskOracle: string } | null;
+  /** `yours` is false while the wallet is still a free trial held by Tab. */
+  ownership: { owner: string; yours: boolean } | null;
   totals: { spent: number; stoppable: number; escrowed: number; saved: number };
   tabs: Tab[];
   approvals: ApprovalView[];
   receipts: ReceiptLine[];
   mcpUrl: string;
   network: { chainId: number; fork: boolean };
+}
+
+/** A transaction Tab built for the person's MetaMask to send. */
+export interface OwnerTx {
+  to: string;
+  data: string;
+  label: string;
 }
 
 export interface Listing {
@@ -154,6 +163,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ seller, reason }),
     }),
+  depositTx: (amount: number) =>
+    call<{ tx: OwnerTx; chainId: number }>("/api/wallet/deposit", { method: "POST", body: JSON.stringify({ amount }) }),
+  deposited: (tx: string) =>
+    call<{ deposit: { from: string; amount: number; tx: string }; owner: string; approval: ApprovalView | null }>(
+      "/api/wallet/deposited",
+      { method: "POST", body: JSON.stringify({ tx }) },
+    ),
+  withdrawPlan: () =>
+    call<{ chainId: number; plan: { owner: string; txs: OwnerTx[]; readyAt: number | null } }>("/api/wallet/withdraw"),
   reopen: (seller: string) =>
     call<ApprovalView & { approvalUrl: string }>("/api/tabs/reopen", { method: "POST", body: JSON.stringify({ seller }) }),
 };

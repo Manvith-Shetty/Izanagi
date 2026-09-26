@@ -2,11 +2,12 @@
 //!
 //! Two signing keys, each with the least it needs:
 //!
-//!   * the **agent** key opens tabs: it calls the escrow's `deposit`, and the collector moves
-//!     the wallet's own funds -- within the allowance its owner granted -- into a channel whose
-//!     payer is that same wallet. It cannot send funds anywhere else.
+//!   * the **agent** key opens tabs: it asks the wallet to `openTab`, which approves the collector
+//!     for exactly that deposit and moves the wallet's own funds into a channel whose payer is
+//!     that same wallet. It cannot send funds anywhere else, and no allowance is left standing.
 //!   * the **treasury** key deploys each person's Countersign wallet, owns it, and funds their
-//!     trial. It is the "bring your own owner" slot, filled by Tab for the free trial.
+//!     trial. It is the "bring your own owner" slot, filled by Tab for the free trial, and it
+//!     hands the wallet over to the person the first time they add money of their own.
 //!
 //! Public RPCs load-balance across nodes that can disagree for a moment about an account's next
 //! nonce, and they rate-limit. So every read retries on a 429, and each key sends one
@@ -18,12 +19,13 @@ use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::client::ClientBuilder;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::sol_types::SolValue;
+use alloy::sol_types::{SolCall, SolValue};
 use alloy::transports::layers::RetryBackoffLayer;
 use anyhow::{anyhow, Context, Result};
 use common::escrow::{ICountersign, IX402BatchSettlement, IERC20};
 use common::{ChannelConfig, ESCROW, USDC_BASE};
 use serde::Serialize;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 /// Creation code of `contracts/src/Countersign.sol:Countersign`, exported by
@@ -45,8 +47,6 @@ pub struct OnChainTab {
 #[serde(rename_all = "camelCase")]
 pub struct WalletState {
     pub usdc: u128,
-    /// What the collector may still move into new tabs.
-    pub allowance: u128,
     pub paused: bool,
     pub owner: Address,
     pub risk_oracle: Address,
@@ -112,7 +112,6 @@ impl Chain {
         let w = ICountersign::new(wallet, &self.read);
         Ok(WalletState {
             usdc: usdc.balanceOf(wallet).call().await.context("USDC balance")?.to::<u128>(),
-            allowance: usdc.allowance(wallet, self.collector).call().await.context("allowance")?.to::<u128>(),
             paused: w.paused().call().await.context("paused")?,
             owner: w.owner().call().await.context("owner")?,
             risk_oracle: w.riskOracle().call().await.context("riskOracle")?,
@@ -130,13 +129,13 @@ impl Chain {
 
     /* --------------------------------- the agent --------------------------------- */
 
-    /// Open (or top up) a tab: the escrow pulls `amount` of the wallet's own USDC, through the
-    /// collector, into the channel `cfg`. The wallet's owner granted the allowance for this.
+    /// Open (or top up) a tab: the wallet moves `amount` of its own USDC, through the collector,
+    /// into the channel `cfg`, approving the collector for exactly that and nothing after.
     pub async fn open_tab(&self, cfg: &ChannelConfig, amount: u128) -> Result<TxHash> {
         let p = self.agent.lock().await;
-        let escrow = IX402BatchSettlement::new(ESCROW, &*p);
-        let receipt = escrow
-            .deposit(cfg.into(), amount, self.collector, Bytes::new())
+        let wallet = ICountersign::new(cfg.payer, &*p);
+        let receipt = wallet
+            .openTab(cfg.into(), amount)
             .send()
             .await
             .context("sending the deposit")?
@@ -173,7 +172,7 @@ impl Chain {
         Ok((wallet, receipt.transaction_hash))
     }
 
-    /// Give a new wallet its trial: `amount` of USDC, and an allowance for its collector.
+    /// Give a new wallet its trial: `amount` of USDC, and the collector its agent opens tabs through.
     pub async fn fund_wallet(&self, wallet: Address, amount: u128) -> Result<(TxHash, TxHash)> {
         let p = self.treasury.lock().await;
         let usdc = IERC20Write::new(USDC_BASE, &*p);
@@ -182,25 +181,126 @@ impl Chain {
         if !t1.status() {
             return Err(anyhow!("trial transfer {} reverted", t1.transaction_hash));
         }
-        let w = ICountersignOwner::new(wallet, &*p);
-        let t2 = w.approveToken(USDC_BASE, self.collector, U256::from(amount)).send().await
-            .context("sending the collector allowance")?
-            .get_receipt().await.context("waiting for the allowance")?;
+        let w = ICountersign::new(wallet, &*p);
+        let t2 = w.setCollector(self.collector).send().await
+            .context("setting the wallet's collector")?
+            .get_receipt().await.context("waiting for the collector")?;
         if !t2.status() {
-            return Err(anyhow!("allowance {} reverted", t2.transaction_hash));
+            return Err(anyhow!("setting the collector {} reverted", t2.transaction_hash));
         }
         Ok((t1.transaction_hash, t2.transaction_hash))
+    }
+
+    /// Hand a trial wallet to `to`. Only while the treasury still owns it: once a person owns
+    /// their wallet, Tab has no say over it, and this is refused rather than attempted.
+    pub async fn hand_over(&self, wallet: Address, to: Address) -> Result<TxHash> {
+        let owner = ICountersign::new(wallet, &self.read).owner().call().await.context("reading the owner")?;
+        if owner != self.treasury_address {
+            return Err(anyhow!("this wallet already belongs to {owner:#x}"));
+        }
+        let p = self.treasury.lock().await;
+        let receipt = ICountersign::new(wallet, &*p)
+            .transferOwnership(to)
+            .send()
+            .await
+            .context("sending the handover")?
+            .get_receipt()
+            .await
+            .context("waiting for the handover")?;
+        if !receipt.status() {
+            return Err(anyhow!("handover {} reverted", receipt.transaction_hash));
+        }
+        Ok(receipt.transaction_hash)
+    }
+
+    /// The USDC a transaction sent to `wallet`, and who sent it: the account that signed the
+    /// transaction and whose own USDC moved. Waits for the transaction to land.
+    pub async fn deposit_into(&self, wallet: Address, tx: TxHash, wait: Duration) -> Result<Deposit> {
+        let deadline = tokio::time::Instant::now() + wait;
+        let receipt = loop {
+            if let Some(r) = self.read.get_transaction_receipt(tx).await.context("reading the receipt")? {
+                break r;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(anyhow!("{tx:#x} has not landed yet; try again in a minute"));
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        };
+        if !receipt.status() {
+            return Err(anyhow!("{tx:#x} failed on chain: no money moved"));
+        }
+        let amount: U256 = receipt
+            .inner
+            .logs()
+            .iter()
+            .filter(|l| l.address() == USDC_BASE)
+            .filter_map(|l| l.log_decode::<IERC20Write::Transfer>().ok())
+            .map(|l| l.inner.data)
+            .filter(|t| t.to == wallet && t.from == receipt.from)
+            .map(|t| t.value)
+            .sum();
+        if amount.is_zero() {
+            return Err(anyhow!("{tx:#x} sent no USDC from its signer to this wallet"));
+        }
+        Ok(Deposit { from: receipt.from, amount: amount.to::<u128>(), tx })
+    }
+}
+
+/// Money a person put into their own wallet.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Deposit {
+    pub from: Address,
+    pub amount: u128,
+    pub tx: TxHash,
+}
+
+/// A transaction for the person's own wallet app (MetaMask) to sign and send. Tab builds the
+/// calldata so the page never encodes anything itself.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerTx {
+    pub to: Address,
+    pub data: Bytes,
+    pub label: String,
+}
+
+impl OwnerTx {
+    /// Send `amount` of USDC from the person's account to their Tab wallet.
+    pub fn deposit(wallet: Address, amount: u128) -> Self {
+        let data = IERC20Write::transferCall { to: wallet, amount: U256::from(amount) }.abi_encode();
+        Self { to: USDC_BASE, data: data.into(), label: "Add money to your Tab".into() }
+    }
+
+    /// Everything the owner signs to take their money out: start withdrawing each tab that still
+    /// holds some, finish those whose wait is over, and sweep what sits in the wallet itself.
+    pub fn withdraw(wallet: Address, owner: Address, idle: u128, tabs: &[(ChannelConfig, OnChainTab, String)], now: u64) -> Vec<Self> {
+        let mut txs = Vec::new();
+        for (cfg, on, name) in tabs {
+            let left = on.balance.saturating_sub(on.total_claimed);
+            if on.withdraw_finalize_after != 0 {
+                if now >= on.withdraw_finalize_after {
+                    let data = ICountersign::finalizeWithdrawCall { cfg: cfg.into() }.abi_encode();
+                    txs.push(Self { to: wallet, data: data.into(), label: format!("Take back what's left in your tab with {name}") });
+                }
+            } else if left > 0 {
+                let data = ICountersign::initiateWithdrawCall { cfg: cfg.into(), amount: left }.abi_encode();
+                txs.push(Self { to: wallet, data: data.into(), label: format!("Start taking back your tab with {name}") });
+            }
+        }
+        if idle > 0 {
+            let data = ICountersign::sweepCall { token: USDC_BASE, to: owner, amount: U256::from(idle) }.abi_encode();
+            txs.push(Self { to: wallet, data: data.into(), label: "Send your wallet's balance to you".into() });
+        }
+        txs
     }
 }
 
 alloy::sol! {
     #[sol(rpc)]
     interface IERC20Write {
+        event Transfer(address indexed from, address indexed to, uint256 value);
         function transfer(address to, uint256 amount) external returns (bool);
-    }
-    #[sol(rpc)]
-    interface ICountersignOwner {
-        function approveToken(address token, address spender, uint256 amount) external;
     }
 }
 
@@ -218,6 +318,47 @@ fn hex(s: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cfg(wallet: Address, salt: u8) -> ChannelConfig {
+        ChannelConfig::countersign(wallet, Address::repeat_byte(0x5e), Address::repeat_byte(0xa1), USDC_BASE, 86400, alloy::primitives::B256::repeat_byte(salt))
+    }
+
+    #[test]
+    fn a_deposit_is_a_usdc_transfer_to_the_wallet() {
+        let wallet = Address::repeat_byte(0x77);
+        let tx = OwnerTx::deposit(wallet, 5_000_000);
+        assert_eq!(tx.to, USDC_BASE);
+        let call = IERC20Write::transferCall::abi_decode(&tx.data).unwrap();
+        assert_eq!((call.to, call.amount), (wallet, U256::from(5_000_000u64)));
+    }
+
+    #[test]
+    fn taking_money_out_starts_finishes_and_sweeps() {
+        let (wallet, owner, now) = (Address::repeat_byte(0x77), Address::repeat_byte(0xb0), 1_000);
+        let tab = |balance, claimed, after| OnChainTab { balance, total_claimed: claimed, withdraw_finalize_after: after };
+        let tabs = vec![
+            (cfg(wallet, 1), tab(50_000, 20_000, 0), "open".to_string()),     // start: 30_000 left
+            (cfg(wallet, 2), tab(50_000, 50_000, 0), "spent".to_string()),    // nothing left: skipped
+            (cfg(wallet, 3), tab(50_000, 0, 900), "ready".to_string()),       // wait over: finish
+            (cfg(wallet, 4), tab(50_000, 0, 5_000), "waiting".to_string()),   // still waiting: skipped
+        ];
+        let txs = OwnerTx::withdraw(wallet, owner, 70_000, &tabs, now);
+        assert_eq!(txs.len(), 3, "{txs:#?}");
+        assert!(txs.iter().all(|t| t.to == wallet));
+
+        let start = ICountersign::initiateWithdrawCall::abi_decode(&txs[0].data).unwrap();
+        assert_eq!(start.amount, 30_000);
+        assert_eq!(start.cfg.salt, alloy::primitives::B256::repeat_byte(1));
+        let finish = ICountersign::finalizeWithdrawCall::abi_decode(&txs[1].data).unwrap();
+        assert_eq!(finish.cfg.salt, alloy::primitives::B256::repeat_byte(3));
+        let sweep = ICountersign::sweepCall::abi_decode(&txs[2].data).unwrap();
+        assert_eq!((sweep.token, sweep.to, sweep.amount), (USDC_BASE, owner, U256::from(70_000u64)));
+    }
+
+    #[test]
+    fn nothing_to_take_out_means_nothing_to_sign() {
+        assert!(OwnerTx::withdraw(Address::ZERO, Address::ZERO, 0, &[], 0).is_empty());
+    }
 
     #[test]
     fn the_embedded_bytecode_decodes() {

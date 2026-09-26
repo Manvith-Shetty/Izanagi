@@ -39,6 +39,16 @@ pub struct ApprovalView {
     pub tx: Option<String>,
 }
 
+/// Where a handover approval stands.
+#[derive(Debug, PartialEq)]
+pub enum Handover {
+    /// The wallet's human approved this exact new owner; the approval is now spent.
+    Approved,
+    Pending,
+    /// Denied, expired, already used, or approved for a different account.
+    Refused(String),
+}
+
 /// What a verified enrolment yields: a stable, private fingerprint of the person, and a
 /// one-time grant to bind a wallet to them. Never the person's identity.
 #[derive(Debug, Clone, Deserialize)]
@@ -144,6 +154,25 @@ impl Brain {
         let body = json!({"grant": grant, "wallet": wallet});
         let (s, b) = self.send(self.http.post(format!("{}/v1/bind", self.base)).json(&body)).await?;
         Self::ok(s, b).map(|_| ())
+    }
+
+    /// Ask the wallet's human, through World ID, to hand the wallet to `new_owner`.
+    pub async fn handover(&self, wallet: Address, new_owner: Address) -> Result<ApprovalView> {
+        let body = json!({"wallet": wallet, "newOwner": new_owner});
+        let (s, b) = self.send(self.http.post(format!("{}/v1/handover", self.base)).json(&body)).await?;
+        Ok(serde_json::from_value(Self::ok(s, b)?).context("decoding a handover approval")?)
+    }
+
+    /// Redeem a handover approval for exactly (wallet, new owner). Spends it when approved.
+    pub async fn claim_handover(&self, id: &str, wallet: Address, new_owner: Address) -> Result<Handover> {
+        let body = json!({"wallet": wallet, "newOwner": new_owner});
+        let (s, b) = self.send(self.http.post(format!("{}/v1/handover/{id}/claim", self.base)).json(&body)).await?;
+        Ok(match s {
+            StatusCode::OK => Handover::Approved,
+            StatusCode::ACCEPTED => Handover::Pending,
+            StatusCode::FORBIDDEN => Handover::Refused(b["error"].as_str().unwrap_or("not approved").to_string()),
+            _ => return Err(anyhow!("claiming a handover: countersigner answered {s}: {b}")),
+        })
     }
 
     pub async fn activity(&self, after: u64) -> Result<Vec<Value>> {

@@ -469,6 +469,36 @@ p {
   padding: 0.7rem 0.9rem;
   font-size: var(--t-sm);
 }
+/* adding money: a dollar field beside the buttons, wrapping on a phone */
+.amount-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.amount {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font: 700 var(--t-sm) / 1 var(--mono);
+  background: var(--paper);
+}
+.amount input {
+  width: 4.5rem;
+  border: 0;
+  outline: none;
+  font: inherit;
+  background: transparent;
+  color: var(--ink);
+}
+.amount:focus-within {
+  outline: 2px solid var(--open);
+  outline-offset: 2px;
+}
+
 .notice {
   background: var(--open-wash);
   border-radius: 8px;

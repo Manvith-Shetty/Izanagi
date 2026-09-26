@@ -1,13 +1,16 @@
 //! Human approvals, each bound to ONE exact action.
 //!
-//! Three things can need a person:
+//! Four things can need a person:
 //!
 //!   * a **payment** the policy will not make alone -- bound to the voucher digest, which
 //!     commits to the channel (payer, seller, token) and the exact limit;
 //!   * **restoring** a seller that was revoked -- bound to (wallet, seller). Stopping payment
 //!     is always free and instant; starting it again is the one direction that needs a human;
 //!   * **enrolling**: proving you are a unique human before you are given a wallet. Bound to
-//!     nothing but itself; what it yields is a fingerprint and a one-time binding grant.
+//!     nothing but itself; what it yields is a fingerprint and a one-time binding grant;
+//!   * **handing a trial wallet over** to an account of the person's own -- bound to
+//!     (wallet, new owner). Whoever holds the new owner's key can take every cent out, so the
+//!     wallet's own human must say which account that is, not whoever holds their session.
 //!
 //! An approval therefore cannot be moved to a different seller, a different amount, or a
 //! second use: the human approved *this*, not a budget.
@@ -28,6 +31,7 @@ pub enum Purpose {
     Payment,
     Restore,
     Enroll,
+    Handover,
 }
 
 impl Purpose {
@@ -36,6 +40,7 @@ impl Purpose {
             Purpose::Payment => "payment",
             Purpose::Restore => "restore",
             Purpose::Enroll => "enroll",
+            Purpose::Handover => "handover",
         }
     }
 }
@@ -46,6 +51,7 @@ pub struct Approval {
     pub id: String,
     pub purpose: Purpose,
     pub wallet: Address,
+    /// The counterparty: the seller for a payment or a restore, the new owner for a handover.
     pub seller: Address,
     /// The ceiling being approved; zero for a restore.
     pub amount: u128,
@@ -171,6 +177,11 @@ pub struct Challenge {
 /// What a restore approval is bound to. Distinct from any voucher digest by construction.
 pub fn restore_digest(wallet: Address, seller: Address) -> String {
     format!("{:#x}", keccak256(format!("countersign.restore:{wallet:#x}:{seller:#x}")))
+}
+
+/// What a handover approval is bound to: this wallet, to this account and no other.
+pub fn handover_digest(wallet: Address, new_owner: Address) -> String {
+    format!("{:#x}", keccak256(format!("countersign.handover:{wallet:#x}:{new_owner:#x}")))
 }
 
 /// Why an approval cannot authorise an action.
@@ -453,6 +464,15 @@ mod tests {
         let (b, pay) = pending().await;
         b.mark_approved(&pay.id, "sub-2".into(), true).await;
         assert_eq!(b.take_enrollment(&pay.id).await, Err(ApprovalError::Unknown));
+    }
+
+    #[test]
+    fn handover_digests_are_bound_to_wallet_and_owner_and_never_a_restore() {
+        let (w, o) = (Address::repeat_byte(1), Address::repeat_byte(2));
+        assert_eq!(handover_digest(w, o), handover_digest(w, o));
+        assert_ne!(handover_digest(w, o), handover_digest(w, Address::repeat_byte(3)));
+        assert_ne!(handover_digest(w, o), handover_digest(Address::repeat_byte(3), o));
+        assert_ne!(handover_digest(w, o), restore_digest(w, o));
     }
 
     #[test]

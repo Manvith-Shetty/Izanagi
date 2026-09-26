@@ -22,14 +22,13 @@ async fn deploy_and_fund_a_persons_wallet() {
 
     let (wallet, tx) = chain.deploy_wallet(oracle).await.unwrap();
     println!("deployed {wallet:#x} in {tx:#x}");
-    let (fund, allow) = chain.fund_wallet(wallet, 250_000).await.unwrap();
-    println!("funded in {fund:#x}, allowance in {allow:#x}");
+    let (fund, collector_tx) = chain.fund_wallet(wallet, 250_000).await.unwrap();
+    println!("funded in {fund:#x}, collector set in {collector_tx:#x}");
 
     let w = chain.wallet(wallet).await.unwrap();
     assert_eq!(w.owner, chain.treasury_address, "the treasury owns trial wallets");
     assert_eq!(w.risk_oracle, oracle, "the countersigner guards it");
     assert_eq!(w.usdc, 250_000, "the trial landed");
-    assert_eq!(w.allowance, 250_000, "the collector may open tabs with it");
     assert!(!w.paused);
     println!("WALLET={wallet:#x}");
 }

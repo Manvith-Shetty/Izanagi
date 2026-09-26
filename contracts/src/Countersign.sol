@@ -6,20 +6,30 @@ import {IX402BatchSettlement, IDepositCollector, IERC20, ChannelConfig} from "./
 /// @title CountersignCollector
 /// @notice Pluggable deposit collector: pulls funds from a Countersign wallet into the escrow.
 /// @dev Wallets approve this contract, so whoever can make it call `transferFrom` can spend
-///      their allowance. Only the escrow may, and the funds only ever go to the escrow -- where
-///      they sit in a channel whose payer is the wallet itself, claimable only with vouchers the
-///      wallet accepts, and withdrawable only by the wallet's owner.
+///      their allowance. Only the escrow may, and the funds only ever go to the escrow -- into a
+///      channel whose vouchers the wallet itself validates, withdrawable only by its owner.
+///
+///      That last part is checked here, not assumed: the escrow's `deposit` is open to anyone,
+///      and a channel names its own `payerAuthorizer`. Without the check a stranger could open a
+///      channel funded by the wallet, name themselves as its authorizer, sign their own vouchers
+///      and claim the lot. So the depositor must pass the channel config as `collectorData`,
+///      and it must be this wallet's, gated by the wallet (`payerAuthorizer == 0`).
 contract CountersignCollector is IDepositCollector {
     address public immutable escrow;
 
     error NotEscrow();
+    error WrongChannel();
+    error NotGatedByPayer();
 
     constructor(address _escrow) {
         escrow = _escrow;
     }
 
-    function collect(address payer, address token, uint256 amount, bytes32, bytes calldata) external {
+    function collect(address payer, address token, uint256 amount, bytes32 channelId, bytes calldata data) external {
         if (msg.sender != escrow) revert NotEscrow();
+        ChannelConfig memory cfg = abi.decode(data, (ChannelConfig));
+        if (IX402BatchSettlement(escrow).getChannelId(cfg) != channelId) revert WrongChannel();
+        if (cfg.payer != payer || cfg.token != token || cfg.payerAuthorizer != address(0)) revert NotGatedByPayer();
         require(IERC20(token).transferFrom(payer, escrow, amount), "pull failed");
     }
 }
@@ -47,6 +57,9 @@ contract CountersignCollector is IDepositCollector {
 ///      Trust model: the oracle holds a veto, never the funds. It cannot move money (the agent must
 ///      also sign), cannot redirect it (the digest binds the channel, which binds the receiver), and
 ///      cannot trap it (`initiateWithdraw`/`finalizeWithdraw` are owner-only and need no oracle).
+///
+///      Ownership can be handed over once per owner, and only by the current owner: a free trial
+///      starts owned by the operator, and passes to the person when they add their own money.
 contract Countersign {
     /*//////////////////////////////////////////////////////////////
                                 CONSTANTS
@@ -65,8 +78,12 @@ contract Countersign {
                                  STORAGE
     //////////////////////////////////////////////////////////////*/
 
-    address public immutable owner; // the human
+    /// @notice Most time the agent may lock funds in a tab for. Real sellers ask for a day.
+    uint40 public constant MAX_TAB_DELAY = 7 days;
+
+    address public owner; // the human (the operator during a free trial, until they take over)
     address public immutable escrow; // Coinbase x402BatchSettlement
+    address public collector; // the deposit collector the agent opens tabs through
 
     address public agent; // agent hot key (may be compromised; alone it can do nothing)
     address public riskOracle; // backend countersigner (holds a veto, never the funds)
@@ -88,7 +105,13 @@ contract Countersign {
 
     error NotOwner();
     error NotGuardian();
+    error NotAgent();
+    error ZeroOwner();
+    error NoCollector();
+    error BadChannel();
 
+    event OwnerChanged(address indexed previousOwner, address indexed newOwner);
+    event CollectorChanged(address indexed collector);
     event AgentChanged(address indexed agent);
     event OracleChanged(address indexed oracle);
     event PausedSet(bool paused);
@@ -111,6 +134,19 @@ contract Countersign {
     /*//////////////////////////////////////////////////////////////
                                  ADMIN
     //////////////////////////////////////////////////////////////*/
+
+    /// @notice Hand the wallet to a new owner. Every owner power moves with it: withdrawals,
+    ///         keys, the collector. The previous owner keeps none of them.
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroOwner();
+        emit OwnerChanged(owner, newOwner);
+        owner = newOwner;
+    }
+
+    function setCollector(address c) external onlyOwner {
+        collector = c;
+        emit CollectorChanged(c);
+    }
 
     function setAgent(address a) external onlyOwner {
         agent = a;
@@ -160,8 +196,25 @@ contract Countersign {
                             CHANNEL LIFECYCLE
     //////////////////////////////////////////////////////////////*/
 
-    function openChannel(ChannelConfig calldata cfg, uint128 amount, address collector) external onlyOwner {
-        IX402BatchSettlement(escrow).deposit(cfg, amount, collector, "");
+    function openChannel(ChannelConfig calldata cfg, uint128 amount, address _collector) external onlyOwner {
+        IX402BatchSettlement(escrow).deposit(cfg, amount, _collector, abi.encode(cfg));
+        emit ChannelOpened(IX402BatchSettlement(escrow).getChannelId(cfg), cfg.receiver, amount);
+    }
+
+    /// @notice Open (or top up) a tab from this wallet's own funds. The agent may: it spends
+    ///         nothing, since the money stays in a channel only this wallet's vouchers unlock.
+    /// @dev The collector is approved for exactly `amount` and reset after, so no allowance is
+    ///      left standing between tabs for anyone else to use.
+    function openTab(ChannelConfig calldata cfg, uint128 amount) external {
+        if (msg.sender != agent && msg.sender != owner) revert NotAgent();
+        if (cfg.payer != address(this) || cfg.payerAuthorizer != address(0) || cfg.withdrawDelay > MAX_TAB_DELAY) {
+            revert BadChannel();
+        }
+        address c = collector;
+        if (c == address(0)) revert NoCollector();
+        IERC20(cfg.token).approve(c, amount);
+        IX402BatchSettlement(escrow).deposit(cfg, amount, c, abi.encode(cfg));
+        IERC20(cfg.token).approve(c, 0);
         emit ChannelOpened(IX402BatchSettlement(escrow).getChannelId(cfg), cfg.receiver, amount);
     }
 

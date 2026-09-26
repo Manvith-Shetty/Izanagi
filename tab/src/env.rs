@@ -18,13 +18,13 @@ pub struct TabEnv {
     /// The countersigner's operator token: stop payments, ask a human to restart them.
     pub control_token: String,
     /// The agent's hot key. Signs vouchers (useless without a countersignature) and pays the
-    /// gas to open tabs from the wallet's pre-approved allowance.
+    /// gas to open tabs, which the wallet funds from its own balance through the collector.
     pub agent_private_key: String,
-    /// Deploys each person's Countersign wallet, owns it, and funds their trial. In the product
-    /// people bring their own owner; for the free trial, Tab's treasury holds that role.
+    /// Deploys each person's Countersign wallet, owns it, and funds their trial. Tab's treasury
+    /// holds the owner role only until the person adds money of their own, then hands it over.
     pub treasury_key: String,
-    /// The shared deposit collector every wallet approves (it only moves a wallet's own funds
-    /// into that wallet's own channels).
+    /// The shared deposit collector every wallet opens tabs through (it only moves a wallet's
+    /// own funds into channels that wallet gates, and only what the wallet approves per tab).
     pub collector: Address,
     /// USDC each new person's wallet starts with, atomic (6 decimals).
     pub trial_amount: u128,

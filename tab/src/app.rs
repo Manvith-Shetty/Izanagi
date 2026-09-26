@@ -4,12 +4,12 @@ use crate::brain::Brain;
 use crate::buyer::Buyer;
 use crate::catalog::Catalog;
 use crate::census::Censor;
-use crate::chain::Chain;
+use crate::chain::{Chain, OwnerTx};
 use crate::env::TabEnv;
 use crate::feed::Feed;
 use crate::onboard::Onboarding;
 use crate::store::{Account, Store};
-use alloy::primitives::Address;
+use alloy::primitives::{Address, TxHash};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -26,6 +26,8 @@ pub struct App {
     pub onboarding: Arc<Onboarding>,
     pub catalog: Catalog,
     pub census: Arc<Censor>,
+    /// Deposits are confirmed one at a time, so a wallet is handed over exactly once.
+    handovers: tokio::sync::Mutex<()>,
 }
 
 pub type Shared = Arc<App>;
@@ -62,7 +64,7 @@ impl App {
         ));
         let catalog = Catalog::new(env.chain_id, env.demo_shop_url.clone());
         let census = Arc::new(Censor::new(&env.blockscout_api, &env.census_rpc, env.state_dir.join("census.json")));
-        Ok(Arc::new(Self { env, brain, chain, store, feed, buyer, onboarding, catalog, census }))
+        Ok(Arc::new(Self { env, brain, chain, store, feed, buyer, onboarding, catalog, census, handovers: Default::default() }))
     }
 
     /// Everything a person sees about their own Tab.
@@ -129,6 +131,11 @@ impl App {
                 "fundTx": a.fund_tx,
             },
             "wallet": wallet,
+            // a free trial is Tab's until the person adds money of their own
+            "ownership": wallet.as_ref().map(|w| json!({
+                "owner": w.owner,
+                "yours": w.owner != self.chain.treasury_address,
+            })),
             "totals": {"spent": spent, "stoppable": stoppable, "escrowed": escrowed, "saved": saved},
             "tabs": tabs,
             "approvals": brain.as_ref().map(|b| b["approvals"].clone()).unwrap_or(json!([])),
@@ -159,6 +166,90 @@ impl App {
         } else {
             Err(anyhow!("you have no tab with {seller:#x}"))
         }
+    }
+
+    /// The transaction a person's MetaMask sends to add `amount` of USDC to their Tab.
+    pub fn deposit_tx(&self, a: &Account, amount: u128) -> OwnerTx {
+        OwnerTx::deposit(a.wallet, amount)
+    }
+
+    /// A person says they added money. Check it on chain, and if their wallet is still a trial,
+    /// offer to make it theirs: the account whose own USDC and signature it was becomes the
+    /// owner, once the wallet's own human approves that account with World ID. So ownership goes
+    /// to an account that can sign, nobody types an address, and a stolen session cannot claim
+    /// the wallet for the thief's account. Sending the same deposit again asks again.
+    pub async fn deposited(self: &Arc<Self>, a: &Account, tx: TxHash) -> Result<Value> {
+        let d = self.chain.deposit_into(a.wallet, tx, Duration::from_secs(90)).await?;
+        self.feed
+            .tab("deposited", json!({"wallet": a.wallet, "from": d.from, "amount": d.amount, "tx": format!("{tx:#x}")}))
+            .await;
+        let owner = self.chain.wallet(a.wallet).await?.owner;
+        if owner != self.chain.treasury_address {
+            return Ok(json!({ "deposit": d, "owner": owner, "approval": null }));
+        }
+        let approval = self.brain.handover(a.wallet, d.from).await?;
+        tokio::spawn(self.clone().follow_handover(a.wallet, approval.id.clone(), d.from, approval.expires_at));
+        Ok(json!({ "deposit": d, "owner": owner, "approval": approval }))
+    }
+
+    /// Wait for the wallet's human to approve a handover, then carry it out. Runs on its own,
+    /// so the person may approve on their phone and close this page.
+    async fn follow_handover(self: Arc<Self>, wallet: Address, id: String, new_owner: Address, expires_at: u64) {
+        use crate::brain::Handover;
+        loop {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            match self.brain.claim_handover(&id, wallet, new_owner).await {
+                Ok(Handover::Pending) if now() <= expires_at + 10 => continue,
+                Ok(Handover::Pending) => return,
+                Ok(Handover::Approved) => {
+                    let _one = self.handovers.lock().await;
+                    match self.chain.hand_over(wallet, new_owner).await {
+                        Ok(h) => {
+                            tracing::info!(%wallet, owner = %new_owner, tx = %h, "handed a trial wallet over");
+                            self.feed
+                                .tab("owner_changed", json!({"wallet": wallet, "owner": new_owner, "tx": format!("{h:#x}")}))
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::error!(%wallet, "an approved handover failed: {e:#}");
+                            self.feed.tab("handover_failed", json!({"wallet": wallet, "reason": format!("{e:#}")})).await;
+                        }
+                    }
+                    return;
+                }
+                Ok(Handover::Refused(reason)) => {
+                    self.feed.tab("handover_refused", json!({"wallet": wallet, "owner": new_owner, "reason": reason})).await;
+                    return;
+                }
+                // the countersigner is down for a moment: the approval's own expiry bounds this
+                Err(e) if now() <= expires_at + 10 => tracing::warn!(approval = %id, "handover claim failed, retrying: {e:#}"),
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// What the owner signs to take their money out. Only once the wallet is theirs.
+    pub async fn withdraw_txs(&self, a: &Account) -> Result<Value> {
+        let w = self.chain.wallet(a.wallet).await?;
+        if w.owner == self.chain.treasury_address {
+            return Err(anyhow!(
+                "this is still a free trial wallet: add money of your own first, and it becomes yours to take out"
+            ));
+        }
+        let mut tabs = Vec::new();
+        for t in self.store.tabs_of(&a.id).await {
+            let on = self.chain.tab(t.channel_id).await?;
+            let name = t.service.as_deref().map(crate::buyer::short_service).unwrap_or_else(|| format!("{:#x}", t.seller));
+            tabs.push((t.config(a.wallet), on, name));
+        }
+        let txs = OwnerTx::withdraw(a.wallet, w.owner, w.usdc, &tabs, now());
+        // tabs already on their way out, whose seller-set wait is not over yet
+        let ready_at = tabs
+            .iter()
+            .map(|(_, on, _)| on.withdraw_finalize_after)
+            .filter(|t| *t > now())
+            .max();
+        Ok(json!({ "owner": w.owner, "txs": txs, "readyAt": ready_at }))
     }
 
     /// Notice when a seller cashes in, so "stoppable" turns into "final" on screen.

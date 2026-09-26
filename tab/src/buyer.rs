@@ -282,7 +282,7 @@ impl Buyer {
                 let need = ceiling - onchain.balance;
                 let deposit = self.tab_deposit.max(need);
                 let w = self.chain.wallet(account.wallet).await?;
-                let available = w.usdc.min(w.allowance);
+                let available = w.usdc;
                 if available < need {
                     return Ok(Outcome::Unpayable {
                         url: url.into(),

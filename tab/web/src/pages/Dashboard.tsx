@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, clock, left, scan, short, usd, type Listing, type Me, type Outcome, type Tab } from "../api";
 import { Brand, CopyField, useCountdown } from "../components/bits";
+import { Money } from "../components/Money";
 
 type FeedItem = { id: number; at: number; kind: string; [k: string]: unknown };
 
@@ -21,7 +22,9 @@ function describe(i: FeedItem, name: (seller: string) => string): { text: string
       return { text: `Added ${usd(i.deposit as number)} to your tab with ${seller}.` };
     case "approval_needed":
     case "approval_requested":
-      return i.purpose === "enroll" ? null : { text: `Waiting for your approval (${i.purpose === "restore" ? "reopen a tab" : "raise a tab's limit"}).` };
+      return i.purpose === "enroll"
+        ? null
+        : { text: `Waiting for your approval (${i.purpose === "restore" ? "reopen a tab" : i.purpose === "handover" ? "make the wallet yours" : "raise a tab's limit"}).` };
     case "approval_granted":
       return { text: "You approved it with World ID." };
     case "approval_denied":
@@ -36,6 +39,14 @@ function describe(i: FeedItem, name: (seller: string) => string): { text: string
       return { text: `${seller} cashed in ${usd(i.amount as number)}. That part is final now.` };
     case "account_created":
       return { text: `Your wallet was created with ${usd(i.trial as number)}.` };
+    case "deposited":
+      return { text: `You added ${usd(i.amount as number)} from ${short(String(i.from))}.` };
+    case "owner_changed":
+      return { text: `The wallet is yours now: only ${short(String(i.owner))} can take money out.` };
+    case "handover_refused":
+      return { text: `The wallet was not handed to ${short(String(i.owner))}: ${String(i.reason).replaceAll("_", " ")}.`, stop: true };
+    case "handover_failed":
+      return { text: `Your approval went through, but handing the wallet over failed: ${i.reason}`, stop: true };
     default:
       return null;
   }
@@ -286,7 +297,8 @@ export default function Dashboard() {
           <h2 style={{ margin: "0.5rem 0 1.2rem" }}>Your tabs</h2>
           {me.approvals.filter((a) => a.status === "pending").map((a) => (
             <div key={a.id} className="notice" style={{ marginBottom: 16 }}>
-              Your OK is needed: {a.purpose === "restore" ? "reopen a tab" : `raise a tab to ${usd(a.amount)}`}.{" "}
+              Your OK is needed:{" "}
+              {a.purpose === "restore" ? "reopen a tab" : a.purpose === "handover" ? `make ${short(a.seller)} the wallet's owner` : `raise a tab to ${usd(a.amount)}`}.{" "}
               <Link to={`/approve/${a.id}`}>Review and approve</Link>
             </div>
           ))}
@@ -324,6 +336,10 @@ export default function Dashboard() {
               <span className="mono">{usd(me.totals.saved)}</span>
             </div>
             <div className="row">
+              <span>Keys held by</span>
+              <span className="mono">{me.ownership?.yours ? `you (${short(me.ownership.owner)})` : "Tab (free trial)"}</span>
+            </div>
+            <div className="row">
               <span>Wallet</span>
               <span className="mono">
                 {walletLink ? (
@@ -337,7 +353,9 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="panel" style={{ marginTop: 18 }}>
+          <Money me={me} onChange={refresh} />
+
+          <div className="panel">
             <h3>Connect your AI</h3>
             <p className="muted" style={{ fontSize: "var(--t-sm)", marginBottom: "0.8rem" }}>
               This link is yours alone: anyone with it can spend from this Tab, within your limits.

@@ -5,13 +5,15 @@
 //!   signed in    GET  /api/me, /api/stream                   (your Tab, live)
 //!   (cookie)     POST /api/buy, /api/approvals/{id}/wait, /api/tabs/close, /api/tabs/reopen,
 //!                     /api/logout
+//!                POST /api/wallet/deposit, /api/wallet/deposited  (add money with MetaMask)
+//!                GET  /api/wallet/withdraw                        (take it out, owner only)
 //!   your agent   /mcp/{token}                                (Streamable HTTP MCP)
 //!   everything else is the website (a single-page app).
 
 use crate::app::Shared;
 use crate::mcp::TabMcp;
 use crate::store::Account;
-use alloy::primitives::Address;
+use alloy::primitives::{Address, TxHash};
 use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
@@ -51,6 +53,9 @@ pub fn router(app: Shared) -> Router {
         .route("/api/approvals/{id}/wait", post(approval_wait))
         .route("/api/tabs/close", post(close))
         .route("/api/tabs/reopen", post(reopen))
+        .route("/api/wallet/deposit", post(deposit))
+        .route("/api/wallet/deposited", post(deposited))
+        .route("/api/wallet/withdraw", get(withdraw))
         .with_state(app.clone());
 
     let web = ServeDir::new(&app.env.web_dir).fallback(ServeFile::new(app.env.web_dir.join("index.html")));
@@ -279,6 +284,54 @@ async fn reopen(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<Tab
     };
     match app.reopen_tab(&a, b.seller).await {
         Ok(v) => (StatusCode::ACCEPTED, Json(v)).into_response(),
+        Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+/// The smallest deposit worth a transaction: one US cent.
+const MIN_DEPOSIT: u128 = 10_000;
+
+#[derive(Deserialize)]
+struct DepositBody {
+    /// Atomic USDC (6 decimals).
+    amount: u128,
+}
+
+/// The transaction for the person's MetaMask to send. Tab never holds that key.
+async fn deposit(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<DepositBody>) -> Response {
+    let a = match signed_in(&app, &headers).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    if b.amount < MIN_DEPOSIT {
+        return bad(StatusCode::BAD_REQUEST, "add at least $0.01");
+    }
+    Json(json!({ "tx": app.deposit_tx(&a, b.amount), "chainId": app.env.chain_id })).into_response()
+}
+
+#[derive(Deserialize)]
+struct DepositedBody {
+    tx: TxHash,
+}
+
+async fn deposited(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<DepositedBody>) -> Response {
+    let a = match signed_in(&app, &headers).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    match app.deposited(&a, b.tx).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => bad(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn withdraw(State(app): State<Shared>, headers: HeaderMap) -> Response {
+    let a = match signed_in(&app, &headers).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    match app.withdraw_txs(&a).await {
+        Ok(v) => Json(json!({ "chainId": app.env.chain_id, "plan": v })).into_response(),
         Err(e) => bad(StatusCode::BAD_REQUEST, e),
     }
 }

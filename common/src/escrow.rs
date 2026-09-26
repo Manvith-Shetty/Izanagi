@@ -22,7 +22,8 @@ sol! {
         struct VoucherClaim { Voucher voucher; bytes signature; uint128 totalClaimed; }
 
         /// Anyone may call this; the collector decides whose funds move. A Countersign
-        /// wallet's collector pulls only what the wallet's owner has approved it for.
+        /// wallet's collector pulls only into channels the wallet itself gates, and a wallet
+        /// approves it only for the deposit it is making (`openTab`).
         function deposit(ChannelConfig calldata config, uint128 amount, address collector, bytes calldata collectorData) external;
         function claim(VoucherClaim[] calldata voucherClaims) external;
         function settle(address receiver, address token) external;
@@ -47,6 +48,15 @@ sol! {
         function revoke(address seller, uint32 reason) external;
         function restore(address seller) external;
         function setPaused(bool p) external;
+
+        // opening tabs (the agent), and what only the owner may do
+        function collector() external view returns (address);
+        function openTab(IX402BatchSettlement.ChannelConfig cfg, uint128 amount) external;
+        function setCollector(address c) external;
+        function transferOwnership(address newOwner) external;
+        function initiateWithdraw(IX402BatchSettlement.ChannelConfig cfg, uint128 amount) external;
+        function finalizeWithdraw(IX402BatchSettlement.ChannelConfig cfg) external;
+        function sweep(address token, address to, uint256 amount) external;
     }
 
     /// The token calls a wallet's dashboard needs.
