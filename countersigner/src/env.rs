@@ -246,6 +246,8 @@ pub struct ServiceEnv {
     /// Base URL of the page that shows a person what they are approving, e.g.
     /// `https://tab.example`. Pushes link to `{url}/approve/{id}`; unset => World's own URL.
     pub approval_page_url: Option<String>,
+    /// Only these wallets' events reach the operator's phone. Unset => all of them.
+    pub push_wallets: Option<Vec<alloy::primitives::Address>>,
 }
 
 impl ServiceEnv {
@@ -263,7 +265,16 @@ impl ServiceEnv {
                 return Err(format!("APPROVAL_PAGE_URL must start with https:// or http:// (got {u:?})"));
             }
         }
+        let push_wallets = match non_empty("PUSH_WALLETS") {
+            None => None,
+            Some(list) => Some(
+                list.split(',')
+                    .map(|w| w.trim().parse().map_err(|e| format!("PUSH_WALLETS has a bad address {w:?}: {e}")))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        };
         Ok(Self {
+            push_wallets,
             rpc: non_empty("BASE_RPC"),
             control_token,
             state_dir: non_empty("STATE_DIR")
@@ -281,6 +292,7 @@ impl std::fmt::Debug for ServiceEnv {
             .field("control_token", &redact(self.control_token.as_deref().unwrap_or("")))
             .field("state_dir", &self.state_dir)
             .field("approval_page_url", &self.approval_page_url)
+            .field("push_wallets", &self.push_wallets)
             .finish()
     }
 }

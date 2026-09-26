@@ -5,7 +5,8 @@
 //!   agent-facing, open        POST /v1/countersign, POST /v1/approve/poll,
 //!                             GET /v1/approvals/{id}, GET /health
 //!   operator-facing, bearer   GET /v1/wallets/{wallet}, GET /v1/activity, GET /v1/stream,
-//!   (`CONTROL_TOKEN`)         GET /v1/screen/{address}, POST /v1/revoke, POST /v1/restore
+//!   (`CONTROL_TOKEN`)         GET /v1/screen/{address}, POST /v1/revoke, POST /v1/restore,
+//!                             POST /v1/enroll, POST /v1/enroll/{id}/claim, POST /v1/bind
 //!
 //! The agent can ask for anything and decide nothing. The operator API can stop payments
 //! and ask a human to restart them; it cannot restart them itself.
@@ -47,6 +48,9 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/screen/{address}", get(screen))
         .route("/v1/revoke", post(revoke))
         .route("/v1/restore", post(restore))
+        .route("/v1/enroll", post(enroll))
+        .route("/v1/enroll/{id}/claim", post(enroll_claim))
+        .route("/v1/bind", post(bind))
         .with_state(app)
 }
 
@@ -591,6 +595,61 @@ async fn restore(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<Re
     }
 }
 
+/// Start "prove you are a unique human" for someone who wants a wallet. Nothing is bound yet.
+async fn enroll(State(app): State<Shared>, headers: HeaderMap) -> Response {
+    if let Err(r) = operator(&app, &headers) {
+        return r;
+    }
+    let n = NewApproval {
+        purpose: Purpose::Enroll,
+        wallet: Address::ZERO,
+        seller: Address::ZERO,
+        amount: 0,
+        reason: "Verify you are a unique human to get your own Tab. One per person.".into(),
+        bound_digest: format!("countersign.enroll:{:032x}", crate::approvals::random_u128()),
+    };
+    match app.request_approval(n).await {
+        Ok(a) => {
+            let mut v = serde_json::to_value(a.view()).unwrap_or_default();
+            v["approvalUrl"] = json!(app.approval_link(&a));
+            (StatusCode::ACCEPTED, Json(v)).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("{e:#}")}))).into_response(),
+    }
+}
+
+/// Redeem an approved enrolment, once: the person's fingerprint, and a grant to bind a wallet.
+async fn enroll_claim(State(app): State<Shared>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+    if let Err(r) = operator(&app, &headers) {
+        return r;
+    }
+    match app.claim_enrollment(&id).await {
+        Ok((human, grant)) => Json(json!({"human": human, "grant": grant})).into_response(),
+        Err(crate::approvals::ApprovalError::NotYetApproved) => {
+            (StatusCode::ACCEPTED, Json(json!({"status": "pending"}))).into_response()
+        }
+        Err(e) => (StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct BindBody {
+    grant: String,
+    wallet: Address,
+}
+
+/// Bind a newly deployed wallet to the person an enrolment verified. From then on only that
+/// person's World ID can approve its payments or reopen its tabs.
+async fn bind(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<BindBody>) -> Response {
+    if let Err(r) = operator(&app, &headers) {
+        return r;
+    }
+    match app.bind_with_grant(&b.grant, b.wallet).await {
+        Ok(human) => Json(json!({"wallet": format!("{:#x}", b.wallet), "human": human})).into_response(),
+        Err(e) => (StatusCode::CONFLICT, Json(json!({"error": format!("{e:#}")}))).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,6 +679,7 @@ mod tests {
                 control_token: control_token.map(String::from),
                 state_dir: std::env::temp_dir().join(format!("cs-api-{}-{}", std::process::id(), rand_suffix())),
                 approval_page_url: Some("https://tab.test".into()),
+                push_wallets: None,
             },
         };
         Arc::new(App::from_env(&cfg).unwrap())
@@ -731,6 +791,20 @@ mod tests {
         let (status, body) = call(a.clone(), req).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["entries"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn enrolment_is_operator_only_and_grants_are_single_use() {
+        let a = app(Some(TOKEN));
+        let (status, _) = call(a.clone(), post("/v1/enroll", None, json!({}))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, body) = call(a.clone(), post("/v1/enroll", Some(TOKEN), json!({}))).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "no World configured here: {body}");
+
+        let (status, _) = call(a.clone(), post("/v1/enroll/apr_nope/claim", Some(TOKEN), json!({}))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "an unknown enrolment yields nothing");
+        let (status, body) = call(a.clone(), post("/v1/bind", Some(TOKEN), json!({"grant": "grant_forged", "wallet": WALLET}))).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
     }
 
     #[test]

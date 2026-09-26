@@ -3,6 +3,7 @@
 use crate::chain::{Chain, Rejected};
 use crate::channels::{check_amounts, check_terms, claim_due, Channel, ClaimOutcome, ClaimReason, Reject};
 use crate::env::SellerEnv;
+use crate::product::Product;
 use crate::screen::{PayerScreen, Standing, Verdict};
 use alloy::primitives::{Address, B256};
 use axum::{
@@ -35,6 +36,7 @@ pub struct App {
     pub env: SellerEnv,
     pub chain: Chain,
     pub screen: PayerScreen,
+    pub product: Product,
     /// One lock per channel: requests on a channel are processed one at a time (spec).
     channels: RwLock<HashMap<B256, Arc<Mutex<Channel>>>>,
 }
@@ -66,7 +68,8 @@ fn header(name: &'static str, value: String) -> (HeaderName, HeaderValue) {
 
 impl App {
     pub fn new(env: SellerEnv, chain: Chain, screen: PayerScreen) -> Self {
-        Self { env, chain, screen, channels: RwLock::new(HashMap::new()) }
+        let product = Product::new(env.rogue_after);
+        Self { env, chain, screen, product, channels: RwLock::new(HashMap::new()) }
     }
 
     /// Our terms, as advertised in every 402.
@@ -107,7 +110,10 @@ impl App {
             error: Some(error.to_string()),
             resource: Some(Resource {
                 url: format!("{}{PAID_PATH}", self.env.public_url),
-                description: "Countersign demo data feed, 0.01 USDC per call".into(),
+                description: match self.env.rogue_after {
+                    0 => "Live Bitcoin price (USD)".into(),
+                    n => format!("Tab demo shop: live Bitcoin price, then junk after {n} paid calls on purpose, to try the kill switch"),
+                },
                 mime_type: "application/json".into(),
             }),
             accepts: vec![req],
@@ -227,10 +233,7 @@ impl App {
 
         // serve, then commit
         let served = ch.requests + 1;
-        let body = json!({
-            "data": format!("paid response #{served} on this channel"),
-            "servedAt": now(),
-        });
+        let body = self.product.serve(served, now()).await;
         ch.commit(self.env.price, max, sig, now());
         ch.standing = verdict.standing;
         ch.payer_score = verdict.toxic_score;
@@ -359,6 +362,7 @@ async fn health(State(app): State<Shared>) -> Json<serde_json::Value> {
         "price": usdc(app.env.price),
         "network": x402::network(app.env.chain_id),
         "payerScreening": !app.env.intercepta_api_key.trim().is_empty(),
+        "rogueAfter": app.env.rogue_after,
     }))
 }
 
@@ -426,6 +430,7 @@ mod tests {
             screen: ScreenConfig { refuse_at: 60.0, careful_at: 30.0, cache_secs: 60 },
             claim: ClaimConfig { tick_secs: 10, margin_secs: 30, max_unclaimed: 1_000_000, max_age_secs: 3600 },
             admin_token: Some("s3cret".into()),
+            rogue_after: 0,
         };
         let chain = Chain::new(&env.rpc, &env.receiver_authorizer_key).unwrap();
         let screen = PayerScreen::new(Intercepta::new(String::new()), env.screen.clone());

@@ -3,5 +3,6 @@
 pub mod chain;
 pub mod channels;
 pub mod env;
+pub mod product;
 pub mod screen;
 pub mod server;

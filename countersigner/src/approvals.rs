@@ -1,11 +1,13 @@
 //! Human approvals, each bound to ONE exact action.
 //!
-//! Two things can need a person:
+//! Three things can need a person:
 //!
 //!   * a **payment** the policy will not make alone -- bound to the voucher digest, which
-//!     commits to the channel (payer, seller, token) and the exact ceiling;
+//!     commits to the channel (payer, seller, token) and the exact limit;
 //!   * **restoring** a seller that was revoked -- bound to (wallet, seller). Stopping payment
-//!     is always free and instant; starting it again is the one direction that needs a human.
+//!     is always free and instant; starting it again is the one direction that needs a human;
+//!   * **enrolling**: proving you are a unique human before you are given a wallet. Bound to
+//!     nothing but itself; what it yields is a fingerprint and a one-time binding grant.
 //!
 //! An approval therefore cannot be moved to a different seller, a different amount, or a
 //! second use: the human approved *this*, not a budget.
@@ -25,6 +27,7 @@ use tokio::sync::RwLock;
 pub enum Purpose {
     Payment,
     Restore,
+    Enroll,
 }
 
 impl Purpose {
@@ -32,6 +35,7 @@ impl Purpose {
         match self {
             Purpose::Payment => "payment",
             Purpose::Restore => "restore",
+            Purpose::Enroll => "enroll",
         }
     }
 }
@@ -206,7 +210,7 @@ pub struct Approvals {
 impl Approvals {
     pub async fn create(&self, n: NewApproval, c: Challenge) -> Approval {
         let a = Approval {
-            id: format!("apr_{:032x}", rand_u128()),
+            id: format!("apr_{:032x}", random_u128()),
             purpose: n.purpose,
             wallet: n.wallet,
             seller: n.seller,
@@ -270,6 +274,28 @@ impl Approvals {
         }
     }
 
+    /// Redeem an enrolment: the verified subject, once. The caller never learns it -- it goes
+    /// straight into a binding grant (see `App::claim_enrollment`).
+    pub async fn take_enrollment(&self, id: &str) -> Result<String, ApprovalError> {
+        let mut g = self.inner.write().await;
+        let a = g.get_mut(id).ok_or(ApprovalError::Unknown)?;
+        if a.purpose != Purpose::Enroll {
+            return Err(ApprovalError::Unknown);
+        }
+        if let Some(r) = &a.denied {
+            return Err(ApprovalError::Denied(r.clone()));
+        }
+        if a.consumed {
+            return Err(ApprovalError::AlreadyUsed);
+        }
+        if a.is_expired() {
+            return Err(ApprovalError::Expired);
+        }
+        let sub = a.human_sub.clone().ok_or(ApprovalError::NotYetApproved)?;
+        a.consumed = true;
+        Ok(sub)
+    }
+
     /// Redeem an approval for one specific action. Single use, and only for the exact digest
     /// the human approved.
     pub async fn consume(&self, id: &str, digest: &str) -> Result<String, ApprovalError> {
@@ -294,14 +320,11 @@ impl Approvals {
     }
 }
 
-fn rand_u128() -> u128 {
-    use std::hash::{BuildHasher, Hasher};
-    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u64(now());
-    let a = h.finish() as u128;
-    let mut h2 = std::collections::hash_map::RandomState::new().build_hasher();
-    h2.write_u64(a as u64);
-    (a << 64) | h2.finish() as u128
+/// 128 bits from the OS's cryptographic RNG. Approval ids and binding grants are capabilities.
+pub fn random_u128() -> u128 {
+    // a fresh secp256k1 key is 32 bytes straight from the OS RNG; we keep 16 of them
+    let b = alloy::signers::local::PrivateKeySigner::random().to_bytes();
+    u128::from_be_bytes(b[..16].try_into().expect("16 bytes"))
 }
 
 #[cfg(test)]
@@ -396,6 +419,40 @@ mod tests {
         assert!(a.pending_for(SELLER).await.is_empty());
         a.mark_denied(&ap.id, "access_denied".into()).await;
         assert!(a.pending_for(WALLET).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_enrollment_yields_its_subject_once_and_only_when_approved() {
+        let a = Approvals::default();
+        let ap = a
+            .create(
+                NewApproval {
+                    purpose: Purpose::Enroll,
+                    wallet: Address::ZERO,
+                    seller: Address::ZERO,
+                    amount: 0,
+                    reason: "get a tab".into(),
+                    bound_digest: "enroll:1".into(),
+                },
+                Challenge {
+                    device_code: "dev".into(),
+                    user_code: "CODE".into(),
+                    verification_uri: "https://sandbox.auth.world.org/device".into(),
+                    verification_uri_complete: None,
+                    expires_in: 600,
+                    interval: 5,
+                },
+            )
+            .await;
+        assert_eq!(a.take_enrollment(&ap.id).await, Err(ApprovalError::NotYetApproved));
+        a.mark_approved(&ap.id, "sub-1".into(), true).await;
+        assert_eq!(a.take_enrollment(&ap.id).await, Ok("sub-1".into()));
+        assert_eq!(a.take_enrollment(&ap.id).await, Err(ApprovalError::AlreadyUsed));
+
+        // a payment approval can never be redeemed as an enrolment
+        let (b, pay) = pending().await;
+        b.mark_approved(&pay.id, "sub-2".into(), true).await;
+        assert_eq!(b.take_enrollment(&pay.id).await, Err(ApprovalError::Unknown));
     }
 
     #[test]

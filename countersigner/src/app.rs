@@ -33,6 +33,9 @@ pub struct Settings {
     pub approval_page_url: Option<String>,
     /// A person approves a tab's limit in steps of this much (see `state::approval_limit`).
     pub approval_step: u128,
+    /// Phone pushes go to one operator topic. With many users' wallets guarded here, only
+    /// these wallets' events are pushed; `None` pushes everything.
+    pub push_wallets: Option<Vec<Address>>,
 }
 
 pub struct App {
@@ -50,7 +53,13 @@ pub struct App {
     pub notify: Option<Notifier>,
     pub settings: Settings,
     budgets: RwLock<HashMap<String, u128>>,
+    /// One-time binding grants from enrolments: grant -> (subject, expires at). The subject
+    /// never leaves this process; the grant lets the operator bind exactly one wallet to it.
+    grants: RwLock<HashMap<String, (String, u64)>>,
 }
+
+/// How long an enrolment's binding grant stays usable: long enough to deploy a wallet.
+const GRANT_TTL: u64 = 1800;
 
 pub type Shared = Arc<App>;
 
@@ -104,9 +113,19 @@ impl App {
                     0 => cfg.policy.autonomous_limit,
                     s => s,
                 },
+                push_wallets: cfg.service.push_wallets.clone(),
             },
             budgets: RwLock::new(HashMap::new()),
+            grants: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Whether this wallet's events should reach the operator's phone.
+    pub fn pushes_for(&self, wallet: Address) -> bool {
+        match &self.settings.push_wallets {
+            None => true,
+            Some(list) => list.contains(&wallet),
+        }
     }
 
     /// Fire and forget, deliberately. No response waits on a push broker, and no decision
@@ -175,7 +194,7 @@ impl App {
         }
 
         // Only the watcher's revocations are news to the person: they did not ask for them.
-        if by == Actor::Watcher {
+        if by == Actor::Watcher && self.pushes_for(wallet) {
             self.push(
                 Push::new(
                     format!("Tab closed · {}", short_addr(&format!("{seller:#x}"))),
@@ -247,8 +266,11 @@ impl App {
                 format!("Reopen a closed tab · {}", a.user_code),
                 format!("resume paying {}", short_addr(&format!("{:#x}", a.seller))),
             ),
+            Purpose::Enroll => (format!("Sign up · {}", a.user_code), "a new Tab account".to_string()),
         };
-        self.push(
+        // a stranger signing up is not news to the operator's phone
+        if a.purpose != Purpose::Enroll && self.pushes_for(a.wallet) {
+          self.push(
             // the code goes in the title: it must be legible from a lock screen
             Push::new(
                 title,
@@ -262,7 +284,8 @@ impl App {
             .priority(Priority::Urgent)
             .click(&link)
             .view_action("Review and approve", &link),
-        );
+          );
+        }
 
         self.journal
             .record(Event::ApprovalRequested {
@@ -320,7 +343,13 @@ impl App {
 
     /// World verified a person. Only the wallet's own human counts.
     async fn approved(&self, a: &Approval, sub: &str, orb_verified: bool) {
-        match self.bindings.check_or_bind(a.wallet, sub).await {
+        // An enrolment has no wallet yet: the person is bound to one later, through a grant.
+        let binding = if a.purpose == Purpose::Enroll {
+            Ok(Bind::Matches)
+        } else {
+            self.bindings.check_or_bind(a.wallet, sub).await
+        };
+        match binding {
             Ok(Bind::WrongHuman) => {
                 tracing::warn!(approval = %a.id, wallet = %a.wallet, "approved by a different human than the wallet's");
                 return self.deny(a, "wrong_human").await;
@@ -387,6 +416,36 @@ impl App {
                 chain_error,
             })
             .await;
+    }
+
+    /* ------------------------------ enrolment and binding ------------------------------ */
+
+    /// Redeem an approved enrolment. Returns the person's fingerprint (stable, private to
+    /// this app) and a one-time grant for binding a wallet to them.
+    pub async fn claim_enrollment(&self, approval_id: &str) -> Result<(String, String), crate::approvals::ApprovalError> {
+        let sub = self.approvals.take_enrollment(approval_id).await?;
+        let grant = format!("grant_{:032x}", crate::approvals::random_u128());
+        let now = crate::state::now();
+        let mut g = self.grants.write().await;
+        g.retain(|_, (_, exp)| *exp > now);
+        g.insert(grant.clone(), (sub.clone(), now + GRANT_TTL));
+        Ok((fingerprint(&sub), grant))
+    }
+
+    /// Bind `wallet` to the person behind `grant`. The grant is used up either way.
+    pub async fn bind_with_grant(&self, grant: &str, wallet: Address) -> Result<String> {
+        let (sub, exp) = self.grants.write().await.remove(grant).ok_or_else(|| anyhow!("unknown or used grant"))?;
+        if exp <= crate::state::now() {
+            return Err(anyhow!("the grant expired"));
+        }
+        match self.bindings.check_or_bind(wallet, &sub).await? {
+            Bind::WrongHuman => Err(anyhow!("that wallet already belongs to a different person")),
+            Bind::BoundNow => {
+                self.journal.record(Event::HumanBound { wallet: format!("{wallet:#x}"), human: fingerprint(&sub) }).await;
+                Ok(fingerprint(&sub))
+            }
+            Bind::Matches => Ok(fingerprint(&sub)),
+        }
     }
 
     /* --------------------------------- the watcher --------------------------------- */

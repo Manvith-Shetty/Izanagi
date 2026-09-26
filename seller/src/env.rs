@@ -27,6 +27,8 @@ pub struct SellerEnv {
     pub claim: ClaimConfig,
     /// Bearer token for `POST /admin/claim`. Unset => the endpoint does not exist.
     pub admin_token: Option<String>,
+    /// Serve junk from this paid call onwards on each channel (the demo shop goes bad). 0 = never.
+    pub rogue_after: u64,
 }
 
 /// How far to trust a payer, by Intercepta toxicScore.
@@ -69,6 +71,7 @@ impl std::fmt::Debug for SellerEnv {
             .field("screen", &self.screen)
             .field("claim", &self.claim)
             .field("admin_token", &self.admin_token.as_ref().map(|_| "<redacted>"))
+            .field("rogue_after", &self.rogue_after)
             .finish()
     }
 }
@@ -111,6 +114,7 @@ impl SellerEnv {
             admin_token: get_from_env_unsafe::<String>("SELLER_ADMIN_TOKEN")
                 .ok()
                 .filter(|t| !t.trim().is_empty()),
+            rogue_after: get_from_env_unsafe("SELLER_ROGUE_AFTER").unwrap_or(0),
         })
     }
 }
